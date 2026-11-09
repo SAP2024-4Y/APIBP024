@@ -1,0 +1,300 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# TicketSphere – Events & Ticketing GraphQL Schema
+# Approach A: GraphQL layer wrapping the REST/service layer
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Scalars ───────────────────────────────────────────────────────────────────
+scalar DateTime
+
+# ── Enums ─────────────────────────────────────────────────────────────────────
+enum EventStatus {
+  draft
+  published
+  cancelled
+  completed
+}
+
+enum EventCategory {
+  music
+  sports
+  tech
+  food
+  art
+  comedy
+  theatre
+  conference
+  other
+}
+
+enum TicketStatus {
+  confirmed
+  cancelled
+  pending
+}
+
+enum UserRole {
+  admin
+  organizer
+  attendee
+}
+
+enum SortOrder {
+  asc
+  desc
+}
+
+# ── Domain error code enum (mirrors REST error catalogue) ────────────────────
+enum DomainErrorCode {
+  AUTH_REQUIRED
+  AUTH_INVALID_TOKEN
+  AUTH_INVALID_CREDENTIALS
+  FORBIDDEN
+  EVENT_NOT_FOUND
+  VENUE_NOT_FOUND
+  TICKET_NOT_FOUND
+  USER_NOT_FOUND
+  BOOKING_CONFLICT
+  EVENT_SOLD_OUT
+  EVENT_CANCELLED
+  TICKET_ALREADY_CANCELLED
+  VALIDATION_ERROR
+  RATE_LIMITED
+  INTERNAL_ERROR
+}
+
+# ── GeoJSON types ─────────────────────────────────────────────────────────────
+type GeoPoint {
+  "GeoJSON type — always 'Point'"
+  type: String!
+  "GeoJSON position: [longitude, latitude] in decimal degrees"
+  coordinates: [Float!]!
+}
+
+# ── Core domain types ─────────────────────────────────────────────────────────
+type Venue {
+  id:         ID!
+  name:       String!
+  address:    String!
+  city:       String!
+  country:    String!
+  location:   GeoPoint!
+  capacity:   Int!
+  events(first: Int, after: String): EventConnection!
+  created_at: DateTime!
+}
+
+type Event {
+  id:              ID!
+  title:           String!
+  description:     String!
+  status:          EventStatus!
+  category:        EventCategory!
+  min_price:       Float!
+  max_price:       Float!
+  venue:           Venue!
+  starts_at:       DateTime!
+  ends_at:         DateTime!
+  total_seats:     Int!
+  available_seats: Int!
+  organizer_id:    ID!
+  tickets(first: Int, after: String): TicketConnection!
+  created_at:      DateTime!
+  updated_at:      DateTime!
+
+  "Use min_price and max_price instead."
+  price: Float @deprecated(reason: "Replaced by min_price and max_price to support tiered pricing.")
+}
+
+type Ticket {
+  id:           ID!
+  event:        Event!
+  user_id:      ID!
+  status:       TicketStatus!
+  price:        Float!
+  seat_number:  String
+  booked_at:    DateTime!
+  cancelled_at: DateTime
+}
+
+type User {
+  id:         ID!
+  username:   String!
+  email:      String!
+  role:       UserRole!
+  created_at: DateTime!
+}
+
+type AuthPayload {
+  token:      String!
+  token_type: String!
+  expires_in: Int!
+  user:       User!
+}
+
+# ── Pagination ────────────────────────────────────────────────────────────────
+type PageInfo {
+  hasNextPage:     Boolean!
+  hasPreviousPage: Boolean!
+  startCursor:     String
+  endCursor:       String
+}
+
+type EventEdge {
+  cursor: String!
+  node:   Event!
+}
+
+type EventConnection {
+  edges:    [EventEdge!]!
+  pageInfo: PageInfo!
+  total:    Int!
+}
+
+type VenueEdge {
+  cursor: String!
+  node:   Venue!
+}
+
+type VenueConnection {
+  edges:    [VenueEdge!]!
+  pageInfo: PageInfo!
+  total:    Int!
+}
+
+type TicketEdge {
+  cursor: String!
+  node:   Ticket!
+}
+
+type TicketConnection {
+  edges:    [TicketEdge!]!
+  pageInfo: PageInfo!
+  total:    Int!
+}
+
+# Geospatial result includes distance
+type NearbyEvent {
+  event:       Event!
+  distance_km: Float!
+}
+
+# ── Inputs ────────────────────────────────────────────────────────────────────
+input CreateEventInput {
+  title:       String!
+  description: String!
+  status:      EventStatus
+  category:    EventCategory!
+  min_price:   Float!
+  max_price:   Float!
+  venue_id:    ID!
+  starts_at:   DateTime!
+  ends_at:     DateTime!
+  total_seats: Int!
+}
+
+input UpdateEventInput {
+  title:       String
+  description: String
+  status:      EventStatus
+  category:    EventCategory
+  min_price:   Float
+  max_price:   Float
+  venue_id:    ID
+  starts_at:   DateTime
+  ends_at:     DateTime
+  total_seats: Int
+}
+
+input CreateVenueInput {
+  name:      String!
+  address:   String!
+  city:      String!
+  country:   String!
+  latitude:  Float!
+  longitude: Float!
+  capacity:  Int!
+}
+
+# ── Query ─────────────────────────────────────────────────────────────────────
+type Query {
+  "List events with filtering, sorting, and cursor pagination (List API)."
+  events(
+    first:     Int
+    after:     String
+    status:    String
+    category:  String
+    min_price: Float
+    max_price: Float
+    sort:      String
+    order:     SortOrder
+  ): EventConnection!
+
+  "Fetch a single event by ID."
+  event(id: ID!): Event
+
+  "Find events within a radius of a point (Map API — proximity search)."
+  nearbyEvents(
+    latitude:  Float!
+    longitude: Float!
+    radius_km: Float!
+    first:     Int
+  ): [NearbyEvent!]!
+
+  "Find events inside a bounding box (Map API — bbox search)."
+  eventsInBbox(
+    min_lat: Float!
+    min_lon: Float!
+    max_lat: Float!
+    max_lon: Float!
+    first:   Int
+  ): [Event!]!
+
+  "List events that overlap the given time window (Calendar API)."
+  eventsByTimeWindow(
+    starts_at: DateTime!
+    ends_at:   DateTime!
+    status:    String
+    category:  String
+    first:     Int
+    after:     String
+  ): EventConnection!
+
+  "List venues with cursor pagination."
+  venues(first: Int, after: String): VenueConnection!
+
+  "Fetch a single venue by ID."
+  venue(id: ID!): Venue
+
+  "List tickets (own tickets for regular users, all tickets for admins). Requires auth."
+  tickets(first: Int, after: String): TicketConnection!
+
+  "Fetch a single ticket by ID. Requires auth."
+  ticket(id: ID!): Ticket
+
+  "Return the authenticated user's profile."
+  me: User
+}
+
+# ── Mutation ──────────────────────────────────────────────────────────────────
+type Mutation {
+  "Authenticate and obtain a Bearer token."
+  login(username: String!, password: String!): AuthPayload!
+
+  "Create a new event. Requires authentication."
+  createEvent(input: CreateEventInput!): Event!
+
+  "Update an existing event. Requires authentication (owner or admin)."
+  updateEvent(id: ID!, input: UpdateEventInput!): Event!
+
+  "Cancel an event (sets status to cancelled). Requires authentication (owner or admin)."
+  cancelEvent(id: ID!): Event!
+
+  "Create a new venue. Requires authentication."
+  createVenue(input: CreateVenueInput!): Venue!
+
+  "Book ticket(s) for an event. Requires authentication."
+  bookTicket(eventId: ID!, quantity: Int): [Ticket!]!
+
+  "Cancel a ticket. Requires authentication (owner or admin)."
+  cancelTicket(id: ID!): Ticket!
+}
