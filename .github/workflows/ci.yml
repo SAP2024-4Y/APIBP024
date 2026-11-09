@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build TypeScript
+        if: github.event_name == 'push'
+        run: npm run build
+
+      - name: Run tests
+        run: npm run test:ci
+        env:
+          NODE_ENV: test
+          PORT: 8080
+          JWT_SECRET: test-secret-key-for-ci
+          DATA_DIR: /tmp/test-data
+
+  docker-compose-smoke:
+    runs-on: ubuntu-latest
+    needs: build-lint-test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and start services
+        run: docker compose up -d --build
+
+      - name: Wait for health check
+        run: |
+          for i in $(seq 1 24); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health)
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i: status $STATUS — waiting 5s"
+            sleep 5
+          done
+          echo "Health check failed after 120s"
+          docker compose logs
+          exit 1
+
+      - name: Smoke test REST endpoints
+        run: |
+          # Health
+          curl -sf http://localhost:8080/health | grep '"status":"ok"'
+
+          # Auth token
+          TOKEN=$(curl -sf -X POST http://localhost:8080/api/v1/auth/token \
+            -H "Content-Type: application/json" \
+            -d '{"username":"demo","password":"demo-password"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+          echo "Got token: ${TOKEN:0:20}..."
+
+          # Events list
+          curl -sf "http://localhost:8080/api/v1/events?limit=5" | grep '"has_more"'
+
+          echo "All smoke tests passed"
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v
