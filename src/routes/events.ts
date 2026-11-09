@@ -166,6 +166,7 @@ router.get('/', (req: Request, res: Response, next: NextFunction) => {
 });
 
 // ── GET /api/v1/events/nearby  (geospatial proximity) ────────────────────────
+// GeoJSON convention: position is [longitude, latitude]
 router.get('/nearby', (req: Request, res: Response, next: NextFunction) => {
   try {
     const q = NearbyQuerySchema.parse(req.query);
