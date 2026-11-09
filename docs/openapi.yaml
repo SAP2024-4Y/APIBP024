@@ -1,0 +1,941 @@
+openapi: '3.1.0'
+info:
+  title: TicketSphere Events & Ticketing API
+  version: '1.0.0'
+  description: |
+    Production-grade REST API for Events & Ticketing.
+    Exposes List, Map (geospatial), and Calendar (temporal) patterns
+    alongside full CRUD for events, venues, and tickets.
+
+    **Authentication:** Bearer JWT — obtain a token via `POST /api/v1/auth/token`.
+  contact:
+    name: Team APIBP024
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+    description: Authentication endpoints
+  - name: Events
+    description: Event management — List, Map, Calendar
+  - name: Venues
+    description: Venue management with geospatial search
+  - name: Tickets
+    description: Ticket booking and management
+  - name: Categories
+    description: Event category reference
+
+paths:
+  # ── Health ────────────────────────────────────────────────────────────────
+  /health:
+    get:
+      summary: Service health check
+      operationId: getHealth
+      security: []
+      tags: [Auth]
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+  /api/v1/auth/token:
+    post:
+      summary: Obtain a Bearer JWT token
+      operationId: login
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              username: demo
+              password: demo-password
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/AuthInvalidCredentials'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ── Events — List ─────────────────────────────────────────────────────────
+  /api/v1/events:
+    get:
+      summary: List events (cursor pagination, filtering, sorting)
+      operationId: listEvents
+      security: []
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/status'
+        - $ref: '#/components/parameters/category'
+        - $ref: '#/components/parameters/min_price'
+        - $ref: '#/components/parameters/max_price'
+        - $ref: '#/components/parameters/sort'
+        - $ref: '#/components/parameters/order'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/after'
+      responses:
+        '200':
+          description: Paginated list of events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventListResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      summary: Create a new event
+      operationId: createEvent
+      tags: [Events]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEventRequest'
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleEventResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/VenueNotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ── Events — Map: Proximity ───────────────────────────────────────────────
+  /api/v1/events/nearby:
+    get:
+      summary: Find events near a point (proximity / radius search)
+      operationId: nearbyEvents
+      security: []
+      tags: [Events]
+      parameters:
+        - name: latitude
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+          description: Centre point latitude (decimal degrees)
+        - name: longitude
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+          description: Centre point longitude (decimal degrees)
+        - name: radius_km
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+          description: Search radius in kilometres
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Events within the specified radius
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NearbyEventsResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ── Events — Map: Bounding Box ────────────────────────────────────────────
+  /api/v1/events/bbox:
+    get:
+      summary: Find events inside a geographic bounding box
+      operationId: bboxEvents
+      security: []
+      tags: [Events]
+      parameters:
+        - name: min_lat
+          in: query
+          required: true
+          schema: { type: number }
+          description: SW corner latitude
+        - name: min_lon
+          in: query
+          required: true
+          schema: { type: number }
+          description: SW corner longitude
+        - name: max_lat
+          in: query
+          required: true
+          schema: { type: number }
+          description: NE corner latitude
+        - name: max_lon
+          in: query
+          required: true
+          schema: { type: number }
+          description: NE corner longitude
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: Events inside the bounding box
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventListSimpleResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ── Events — Calendar ─────────────────────────────────────────────────────
+  /api/v1/events/schedule:
+    get:
+      summary: List events overlapping a time window (Calendar API)
+      operationId: scheduleEvents
+      security: []
+      tags: [Events]
+      parameters:
+        - name: starts_at
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Window start — ISO 8601 UTC
+          example: '2026-12-01T09:00:00Z'
+        - name: ends_at
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Window end — ISO 8601 UTC
+          example: '2026-12-31T23:59:59Z'
+        - $ref: '#/components/parameters/status'
+        - $ref: '#/components/parameters/category'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/after'
+      responses:
+        '200':
+          description: Events overlapping the time window
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ── Events — Single ───────────────────────────────────────────────────────
+  /api/v1/events/{id}:
+    get:
+      summary: Get an event by ID
+      operationId: getEvent
+      security: []
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Event details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleEventResponse'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+    put:
+      summary: Update an event
+      operationId: updateEvent
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEventRequest'
+      responses:
+        '200':
+          description: Updated event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleEventResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      summary: Cancel an event
+      operationId: cancelEvent
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Event cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      status: { type: string, example: cancelled }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+
+  # ── Venues ────────────────────────────────────────────────────────────────
+  /api/v1/venues:
+    get:
+      summary: List all venues
+      operationId: listVenues
+      security: []
+      tags: [Venues]
+      parameters:
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: List of venues
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VenueListResponse'
+    post:
+      summary: Create a venue
+      operationId: createVenue
+      tags: [Venues]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVenueRequest'
+      responses:
+        '201':
+          description: Venue created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleVenueResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/venues/nearby:
+    get:
+      summary: Find venues near a point
+      operationId: nearbyVenues
+      security: []
+      tags: [Venues]
+      parameters:
+        - name: latitude
+          in: query
+          required: true
+          schema: { type: number }
+        - name: longitude
+          in: query
+          required: true
+          schema: { type: number }
+        - name: radius_km
+          in: query
+          required: true
+          schema: { type: number }
+      responses:
+        '200':
+          description: Venues within the radius
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NearbyVenuesResponse'
+
+  /api/v1/venues/{id}:
+    get:
+      summary: Get a venue by ID
+      operationId: getVenue
+      security: []
+      tags: [Venues]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Venue details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleVenueResponse'
+        '404':
+          $ref: '#/components/responses/VenueNotFound'
+    put:
+      summary: Update a venue
+      operationId: updateVenue
+      tags: [Venues]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVenueRequest'
+      responses:
+        '200':
+          description: Updated venue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleVenueResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/VenueNotFound'
+
+  # ── Tickets ───────────────────────────────────────────────────────────────
+  /api/v1/tickets:
+    get:
+      summary: List tickets (own tickets; all for admins)
+      operationId: listTickets
+      tags: [Tickets]
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/after'
+      responses:
+        '200':
+          description: Ticket list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Book ticket(s) for an event
+      operationId: bookTicket
+      tags: [Tickets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookTicketRequest'
+      responses:
+        '201':
+          description: Tickets booked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookTicketResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+        '409':
+          $ref: '#/components/responses/BookingConflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v1/tickets/{id}:
+    get:
+      summary: Get a ticket by ID
+      operationId: getTicket
+      tags: [Tickets]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Ticket details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleTicketResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/TicketNotFound'
+    delete:
+      summary: Cancel a ticket
+      operationId: cancelTicket
+      tags: [Tickets]
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '200':
+          description: Ticket cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      status: { type: string, example: cancelled }
+                      cancelled_at: { type: string, format: date-time }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/TicketNotFound'
+        '409':
+          $ref: '#/components/responses/TicketAlreadyCancelled'
+
+  # ── Categories ────────────────────────────────────────────────────────────
+  /api/v1/categories:
+    get:
+      summary: List all event categories
+      operationId: listCategories
+      security: []
+      tags: [Categories]
+      responses:
+        '200':
+          description: Category list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Category'
+
+# ── Components ──────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    status:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum: [draft, published, cancelled, completed]
+    category:
+      name: category
+      in: query
+      schema:
+        type: string
+        enum: [music, sports, tech, food, art, comedy, theatre, conference, other]
+    min_price:
+      name: min_price
+      in: query
+      schema: { type: number, format: double }
+    max_price:
+      name: max_price
+      in: query
+      schema: { type: number, format: double }
+    sort:
+      name: sort
+      in: query
+      schema:
+        type: string
+        enum: [title, min_price, max_price, starts_at, ends_at, created_at, available_seats]
+        default: created_at
+    order:
+      name: order
+      in: query
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
+    limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    after:
+      name: after
+      in: query
+      description: Opaque cursor for keyset pagination
+      schema: { type: string }
+
+  schemas:
+    # ── Primitives ──────────────────────────────────────────────────────────
+    GeoPoint:
+      type: object
+      properties:
+        type:
+          type: string
+          example: Point
+        coordinates:
+          type: array
+          items: { type: number }
+          description: '[longitude, latitude] per GeoJSON spec'
+          example: [-73.9934, 40.7505]
+      required: [type, coordinates]
+
+    Pagination:
+      type: object
+      properties:
+        limit:       { type: integer }
+        has_more:    { type: boolean }
+        next_cursor: { type: string, nullable: true }
+      required: [limit, has_more]
+
+    ErrorBody:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            details: {}
+          required: [code, message]
+      required: [error]
+
+    # ── Health ──────────────────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:    { type: string, example: ok }
+        service:   { type: string }
+        timestamp: { type: string, format: date-time }
+
+    # ── Auth ────────────────────────────────────────────────────────────────
+    LoginRequest:
+      type: object
+      properties:
+        username: { type: string, example: demo }
+        password: { type: string, example: demo-password }
+      required: [username, password]
+
+    TokenResponse:
+      type: object
+      properties:
+        token:      { type: string }
+        token_type: { type: string, example: Bearer }
+        expires_in: { type: integer, example: 86400 }
+      required: [token, token_type, expires_in]
+
+    # ── Venue ───────────────────────────────────────────────────────────────
+    Venue:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        address:    { type: string }
+        city:       { type: string }
+        country:    { type: string }
+        location:   { $ref: '#/components/schemas/GeoPoint' }
+        capacity:   { type: integer }
+        created_at: { type: string, format: date-time }
+      required: [id, name, address, city, country, location, capacity, created_at]
+
+    CreateVenueRequest:
+      type: object
+      properties:
+        name:      { type: string }
+        address:   { type: string }
+        city:      { type: string }
+        country:   { type: string, minLength: 2, maxLength: 2 }
+        latitude:  { type: number }
+        longitude: { type: number }
+        capacity:  { type: integer, minimum: 1 }
+      required: [name, address, city, country, latitude, longitude, capacity]
+
+    VenueListResponse:
+      type: object
+      properties:
+        data:  { type: array, items: { $ref: '#/components/schemas/Venue' } }
+        total: { type: integer }
+
+    SingleVenueResponse:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/Venue' }
+
+    NearbyVenueItem:
+      allOf:
+        - $ref: '#/components/schemas/Venue'
+        - type: object
+          properties:
+            distance_km: { type: number }
+
+    NearbyVenuesResponse:
+      type: object
+      properties:
+        data:  { type: array, items: { $ref: '#/components/schemas/NearbyVenueItem' } }
+        total: { type: integer }
+
+    # ── Event ───────────────────────────────────────────────────────────────
+    Event:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        title:           { type: string }
+        description:     { type: string }
+        status:          { type: string, enum: [draft, published, cancelled, completed] }
+        category:        { type: string, enum: [music, sports, tech, food, art, comedy, theatre, conference, other] }
+        min_price:       { type: number }
+        max_price:       { type: number }
+        venue:           { $ref: '#/components/schemas/Venue' }
+        starts_at:       { type: string, format: date-time }
+        ends_at:         { type: string, format: date-time }
+        total_seats:     { type: integer }
+        available_seats: { type: integer }
+        organizer_id:    { type: string, format: uuid }
+        created_at:      { type: string, format: date-time }
+        updated_at:      { type: string, format: date-time }
+      required: [id, title, description, status, category, min_price, max_price, starts_at, ends_at, total_seats, available_seats, created_at, updated_at]
+
+    CreateEventRequest:
+      type: object
+      properties:
+        title:       { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, minLength: 1 }
+        status:      { type: string, enum: [draft, published, cancelled, completed] }
+        category:    { type: string, enum: [music, sports, tech, food, art, comedy, theatre, conference, other] }
+        min_price:   { type: number, minimum: 0 }
+        max_price:   { type: number, minimum: 0 }
+        venue_id:    { type: string, format: uuid }
+        starts_at:   { type: string, format: date-time }
+        ends_at:     { type: string, format: date-time }
+        total_seats: { type: integer, minimum: 1 }
+      required: [title, description, category, min_price, max_price, venue_id, starts_at, ends_at, total_seats]
+
+    UpdateEventRequest:
+      type: object
+      properties:
+        title:       { type: string }
+        description: { type: string }
+        status:      { type: string, enum: [draft, published, cancelled, completed] }
+        category:    { type: string, enum: [music, sports, tech, food, art, comedy, theatre, conference, other] }
+        min_price:   { type: number }
+        max_price:   { type: number }
+        venue_id:    { type: string, format: uuid }
+        starts_at:   { type: string, format: date-time }
+        ends_at:     { type: string, format: date-time }
+        total_seats: { type: integer }
+
+    SingleEventResponse:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/Event' }
+
+    EventListResponse:
+      type: object
+      properties:
+        data:       { type: array, items: { $ref: '#/components/schemas/Event' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+      required: [data, pagination]
+
+    EventListSimpleResponse:
+      type: object
+      properties:
+        data:  { type: array, items: { $ref: '#/components/schemas/Event' } }
+        total: { type: integer }
+
+    NearbyEventItem:
+      type: object
+      properties:
+        distance_km: { type: number }
+      allOf:
+        - $ref: '#/components/schemas/Event'
+
+    NearbyEventsResponse:
+      type: object
+      properties:
+        data:  { type: array, items: { $ref: '#/components/schemas/NearbyEventItem' } }
+        total: { type: integer }
+
+    ScheduleResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        window:
+          type: object
+          properties:
+            starts_at: { type: string, format: date-time }
+            ends_at:   { type: string, format: date-time }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    # ── Ticket ──────────────────────────────────────────────────────────────
+    Ticket:
+      type: object
+      properties:
+        id:           { type: string, format: uuid }
+        event_id:     { type: string, format: uuid }
+        event_title:  { type: string }
+        user_id:      { type: string, format: uuid }
+        status:       { type: string, enum: [confirmed, cancelled, pending] }
+        price:        { type: number }
+        seat_number:  { type: string }
+        booked_at:    { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+      required: [id, event_id, user_id, status, price, booked_at]
+
+    BookTicketRequest:
+      type: object
+      properties:
+        event_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 10, default: 1 }
+      required: [event_id]
+
+    BookTicketResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Ticket' }
+
+    SingleTicketResponse:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/Ticket' }
+
+    TicketListResponse:
+      type: object
+      properties:
+        data:       { type: array, items: { $ref: '#/components/schemas/Ticket' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    # ── Category ────────────────────────────────────────────────────────────
+    Category:
+      type: object
+      properties:
+        id:          { type: string }
+        label:       { type: string }
+        description: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Authentication required or token invalid
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          examples:
+            AUTH_REQUIRED:
+              value: { error: { code: AUTH_REQUIRED, message: Authentication required. } }
+            AUTH_INVALID_TOKEN:
+              value: { error: { code: AUTH_INVALID_TOKEN, message: Token is invalid or has expired. } }
+
+    AuthInvalidCredentials:
+      description: Invalid username or password
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: AUTH_INVALID_CREDENTIALS, message: Invalid username or password. } }
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: FORBIDDEN, message: You do not have permission to perform this action. } }
+
+    EventNotFound:
+      description: Event not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: EVENT_NOT_FOUND, message: Event not found. } }
+
+    VenueNotFound:
+      description: Venue not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: VENUE_NOT_FOUND, message: Venue not found. } }
+
+    TicketNotFound:
+      description: Ticket not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: TICKET_NOT_FOUND, message: Ticket not found. } }
+
+    BookingConflict:
+      description: Event sold out or cancelled
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          examples:
+            EVENT_SOLD_OUT:
+              value: { error: { code: EVENT_SOLD_OUT, message: This event has no available seats. } }
+            EVENT_CANCELLED:
+              value: { error: { code: EVENT_CANCELLED, message: Cannot book a ticket for a cancelled event. } }
+
+    TicketAlreadyCancelled:
+      description: Ticket is already cancelled
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: TICKET_ALREADY_CANCELLED, message: This ticket has already been cancelled. } }
+
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: VALIDATION_ERROR, message: Request validation failed. } }
+
+    RateLimited:
+      description: Too many requests
+      headers:
+        RateLimit-Limit:
+          schema: { type: integer }
+          description: Maximum requests per window
+        RateLimit-Remaining:
+          schema: { type: integer }
+          description: Requests remaining in current window
+        RateLimit-Reset:
+          schema: { type: integer }
+          description: Unix timestamp when the window resets
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorBody' }
+          example: { error: { code: RATE_LIMITED, message: Too many requests. Please try again later. } }
