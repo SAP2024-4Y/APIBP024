@@ -5,3 +5,6 @@ tmp-test-data/
 .env
 *.db-shm
 *.db-wal
+ui/node_modules/
+ui/dist/
+*.docx
