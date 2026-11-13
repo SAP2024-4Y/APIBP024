@@ -76,6 +76,40 @@ router.get('/nearby', (req: Request, res: Response, next: NextFunction) => {
   }
 });
  
+// GET /api/v1/venues/search?q=<name or city>
+router.get('/search', (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const q = ((req.query['q'] as string) || '').trim();
+    if (!q) throw new AppError('VALIDATION_ERROR', 'Query parameter "q" is required.');
+    const db = getDb();
+    const pattern = `%${q}%`;
+    const rows = db.prepare(`
+      SELECT * FROM venues
+      WHERE name LIKE ? OR city LIKE ?
+      ORDER BY name ASC LIMIT 50
+    `).all(pattern, pattern) as Record<string, unknown>[];
+    res.json({ data: rows.map(venueToGeoJson), total: rows.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/v1/venues/:id/events?status=<status>
+router.get('/:id/events', (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const db = getDb();
+    const venue = db.prepare('SELECT id FROM venues WHERE id = ?').get(req.params.id);
+    if (!venue) throw new AppError('VENUE_NOT_FOUND');
+    const status = req.query['status'] as string | undefined;
+    const rows = status
+      ? db.prepare('SELECT * FROM events WHERE venue_id = ? AND status = ? ORDER BY starts_at ASC').all(req.params.id, status)
+      : db.prepare('SELECT * FROM events WHERE venue_id = ? ORDER BY starts_at ASC').all(req.params.id);
+    res.json({ data: rows, total: (rows as unknown[]).length });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/v1/venues/:id
 router.get('/:id', (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -125,6 +159,24 @@ router.put('/:id', requireAuth, (req: AuthedRequest, res: Response, next: NextFu
     next(err);
   }
 });
- 
+
+// DELETE /api/v1/venues/:id  (admin only; blocked when active or draft events exist)
+router.delete('/:id', requireAuth, (req: AuthedRequest, res: Response, next: NextFunction) => {
+  try {
+    const db = getDb();
+    const existing = db.prepare('SELECT id FROM venues WHERE id = ?').get(req.params.id);
+    if (!existing) throw new AppError('VENUE_NOT_FOUND');
+    if (req.user!.role !== 'admin') throw new AppError('FORBIDDEN');
+    const { cnt } = db.prepare(
+      "SELECT COUNT(*) as cnt FROM events WHERE venue_id = ? AND status IN ('published','draft')"
+    ).get(req.params.id) as { cnt: number };
+    if (cnt > 0) throw new AppError('VALIDATION_ERROR', 'Cannot delete a venue that has active or draft events.');
+    db.prepare('DELETE FROM venues WHERE id = ?').run(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
  
