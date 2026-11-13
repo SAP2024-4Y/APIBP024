@@ -9,6 +9,7 @@ import MyTickets from './components/MyTickets'
 import ProfilePage from './components/ProfilePage'
 import LoginModal from './components/LoginModal'
 import BookingModal from './components/BookingModal'
+import CartModal, { type CartItem } from './components/CartModal'
 
 const VIEWS: View[] = ['dashboard', 'events', 'map', 'calendar', 'tickets', 'profile']
 
@@ -31,24 +32,20 @@ export default function App() {
     setView(v)
   }
 
-  // Sync browser back/forward to view state
   useEffect(() => {
-    function onHashChange() {
-      const v = hashToView()
-      setViewState(v)
-    }
+    function onHashChange() { setViewState(hashToView()) }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  // Auth state — persist in sessionStorage
   const [token, setToken] = useState<string>(() => sessionStorage.getItem('token') ?? '')
   const [username, setUsername] = useState<string>(() => sessionStorage.getItem('username') ?? '')
 
-  // Modal state
   const [showLogin, setShowLogin] = useState(false)
   const [bookingEvent, setBookingEvent] = useState<Event | null>(null)
   const [mapFocus, setMapFocus] = useState<{ lat: number; lon: number } | null>(null)
+  const [cart, setCart] = useState<CartItem[]>([])
+  const [showCart, setShowCart] = useState(false)
 
   useEffect(() => {
     if (token) sessionStorage.setItem('token', token)
@@ -74,8 +71,17 @@ export default function App() {
     setBookingEvent(event)
   }
 
+  function handleAddToCart(event: Event) {
+    setCart(c => {
+      const existing = c.find(i => i.event.id === event.id)
+      if (existing) return c.map(i => i.event.id === event.id ? { ...i, quantity: Math.min(10, i.quantity + 1) } : i)
+      return [...c, { event, quantity: 1 }]
+    })
+  }
+
   function handleNeedAuth() {
     setBookingEvent(null)
+    setShowCart(false)
     setShowLogin(true)
   }
 
@@ -86,9 +92,14 @@ export default function App() {
     setView('map')
   }
 
-  function handleBookingSuccess() {
-    setBookingEvent(null)
+  function handleCartSuccess() {
+    setCart([])
+    setShowCart(false)
+    setView('tickets')
   }
+
+  const cartCount = cart.reduce((s, i) => s + i.quantity, 0)
+  const cartEventIds = new Set(cart.map(i => i.event.id))
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
@@ -98,16 +109,20 @@ export default function App() {
         username={username}
         onLogin={() => setShowLogin(true)}
         onLogout={handleLogout}
+        cartCount={cartCount}
+        onCartOpen={() => setShowCart(true)}
       />
 
       <main className="max-w-screen-xl mx-auto px-4 py-6">
         {view === 'dashboard' && (
-          <Dashboard username={username} onNavigate={navigateTo} onBook={handleBook} />
+          <Dashboard username={username} onNavigate={navigateTo} onBook={handleBook} onAddToCart={handleAddToCart} cartEventIds={cartEventIds} />
         )}
 
         {view === 'events' && (
           <EventList
             onBook={handleBook}
+            onAddToCart={handleAddToCart}
+            cartEventIds={cartEventIds}
             initialCategory={eventCategory}
             onCategoryConsumed={() => setEventCategory('')}
           />
@@ -128,10 +143,8 @@ export default function App() {
             <div className="text-center py-24 text-slate-500">
               <div className="text-5xl mb-4">🔐</div>
               <div className="text-lg font-medium text-slate-400">Sign in to view your tickets</div>
-              <button
-                onClick={() => setShowLogin(true)}
-                className="mt-4 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium text-sm transition-colors"
-              >
+              <button onClick={() => setShowLogin(true)}
+                className="mt-4 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium text-sm transition-colors">
                 Sign in
               </button>
             </div>
@@ -140,22 +153,14 @@ export default function App() {
 
         {view === 'profile' && (
           token ? (
-            <ProfilePage
-              token={token}
-              username={username}
-              onNavigate={setView}
-              onBook={handleBook}
-              onLogout={handleLogout}
-              onNeedAuth={handleNeedAuth}
-            />
+            <ProfilePage token={token} username={username} onNavigate={setView}
+              onBook={handleBook} onLogout={handleLogout} onNeedAuth={handleNeedAuth} />
           ) : (
             <div className="text-center py-24 text-slate-500">
               <div className="text-5xl mb-4">🔐</div>
               <div className="text-lg font-medium text-slate-400">Sign in to view your profile</div>
-              <button
-                onClick={() => setShowLogin(true)}
-                className="mt-4 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium text-sm transition-colors"
-              >
+              <button onClick={() => setShowLogin(true)}
+                className="mt-4 px-5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium text-sm transition-colors">
                 Sign in
               </button>
             </div>
@@ -163,22 +168,31 @@ export default function App() {
         )}
       </main>
 
-      {/* Modals */}
       {showLogin && (
-        <LoginModal
-          onSuccess={handleLoginSuccess}
-          onClose={() => setShowLogin(false)}
-        />
+        <LoginModal onSuccess={handleLoginSuccess} onClose={() => setShowLogin(false)} />
       )}
 
       {bookingEvent && (
         <BookingModal
           event={bookingEvent}
           token={token}
-          onSuccess={handleBookingSuccess}
+          onSuccess={() => setBookingEvent(null)}
           onClose={() => setBookingEvent(null)}
           onNeedAuth={handleNeedAuth}
           onViewOnMap={() => handleViewOnMap(bookingEvent)}
+        />
+      )}
+
+      {showCart && (
+        <CartModal
+          items={cart}
+          token={token}
+          username={username}
+          onClose={() => setShowCart(false)}
+          onUpdateQty={(id, qty) => setCart(c => c.map(i => i.event.id === id ? { ...i, quantity: qty } : i))}
+          onRemove={id => setCart(c => c.filter(i => i.event.id !== id))}
+          onSuccess={handleCartSuccess}
+          onNeedAuth={handleNeedAuth}
         />
       )}
     </div>

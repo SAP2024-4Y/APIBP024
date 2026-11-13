@@ -6,6 +6,8 @@ interface Props {
   onChangeView: (v: View) => void
   onLogin: () => void
   onLogout: () => void
+  cartCount: number
+  onCartOpen: () => void
 }
 
 const NAV: { id: View; label: string; icon: string }[] = [
@@ -16,7 +18,7 @@ const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'tickets',   label: 'My Tickets', icon: '🎟️' },
 ]
 
-export default function Header({ username, view, onChangeView, onLogin, onLogout }: Props) {
+export default function Header({ username, view, onChangeView, onLogin, onLogout, cartCount, onCartOpen }: Props) {
   return (
     <header className="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-700/50">
       <div className="max-w-7xl mx-auto px-4 h-16 flex items-center gap-4">
@@ -48,6 +50,20 @@ export default function Header({ username, view, onChangeView, onLogin, onLogout
             </button>
           ))}
         </nav>
+
+        {/* Cart */}
+        <button
+          onClick={onCartOpen}
+          className="relative flex-shrink-0 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
+          title="Cart"
+        >
+          🛒
+          {cartCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-brand-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-0.5">
+              {cartCount > 99 ? '99+' : cartCount}
+            </span>
+          )}
+        </button>
 
         {/* Auth */}
         {username ? (
