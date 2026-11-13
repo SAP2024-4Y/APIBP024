@@ -28,7 +28,7 @@ const ListQuerySchema = z.object({
 const NearbyQuerySchema = z.object({
   latitude:  z.coerce.number().min(-90).max(90),
   longitude: z.coerce.number().min(-180).max(180),
-  radius_km: z.coerce.number().positive().max(500),
+  radius_km: z.coerce.number().positive().max(500), // Must be > 0 and <= 500 km; zero, negative or oversized values are rejected by validation.
   limit:     z.coerce.number().int().min(1).max(100).optional().default(20),
 });
 

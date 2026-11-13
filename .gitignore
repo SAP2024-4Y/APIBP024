@@ -8,3 +8,4 @@ tmp-test-data/
 ui/node_modules/
 ui/dist/
 *.docx
+.DS_Store
