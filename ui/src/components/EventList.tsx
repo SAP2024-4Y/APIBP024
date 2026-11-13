@@ -6,11 +6,13 @@ import EventFilters, { DEFAULT_FILTERS, type Filters } from './EventFilters'
 
 interface Props {
   onBook: (event: Event) => void
+  onAddToCart?: (event: Event) => void
+  cartEventIds?: Set<string>
   initialCategory?: string
   onCategoryConsumed?: () => void
 }
 
-export default function EventList({ onBook, initialCategory, onCategoryConsumed }: Props) {
+export default function EventList({ onBook, onAddToCart, cartEventIds, initialCategory, onCategoryConsumed }: Props) {
   const [events, setEvents] = useState<Event[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
@@ -80,7 +82,7 @@ export default function EventList({ onBook, initialCategory, onCategoryConsumed 
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {events.map(e => (
-          <EventCard key={e.id} event={e} onBook={onBook} />
+          <EventCard key={e.id} event={e} onBook={onBook} onAddToCart={onAddToCart} inCart={cartEventIds?.has(e.id)} />
         ))}
         {loading && Array.from({ length: 8 }).map((_, i) => (
           <div key={i} className="bg-slate-800 rounded-xl h-64 animate-pulse border border-slate-700/50" />
