@@ -65,6 +65,10 @@ jobs:
 
           echo "All smoke tests passed"
 
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs app
+
       - name: Stop services
         if: always()
         run: docker compose down -v

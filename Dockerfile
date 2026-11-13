@@ -18,7 +18,7 @@ COPY ui ./
 RUN npm run build
 
 # ── production image ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 
 WORKDIR /app
 COPY package*.json ./
