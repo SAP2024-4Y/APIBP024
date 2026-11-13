@@ -8,6 +8,8 @@ interface Props {
   username: string
   onNavigate: (v: View, opts?: { category?: string }) => void
   onBook: (event: Event) => void
+  onAddToCart?: (event: Event) => void
+  cartEventIds?: Set<string>
 }
 
 interface Stats {
@@ -23,7 +25,7 @@ const CATEGORY_HEX: Record<string, string> = {
   theatre: '#ef4444', conference: '#06b6d4', other: '#64748b',
 }
 
-export default function Dashboard({ username, onNavigate, onBook }: Props) {
+export default function Dashboard({ username, onNavigate, onBook, onAddToCart, cartEventIds }: Props) {
   const [allEvents, setAllEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -160,7 +162,7 @@ export default function Dashboard({ username, onNavigate, onBook }: Props) {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {upcomingEvents.map(e => (
-              <EventCard key={e.id} event={e} onBook={onBook} />
+              <EventCard key={e.id} event={e} onBook={onBook} onAddToCart={onAddToCart} inCart={cartEventIds?.has(e.id)} />
             ))}
           </div>
         )}
