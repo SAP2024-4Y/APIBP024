@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Event, Ticket, View } from '../types'
 import { getMyTickets, getEvent } from '../api/client'
+import TicketDetailModal from './TicketDetailModal'
 
 interface Props {
   token: string
@@ -10,6 +11,7 @@ interface Props {
   onLogout: () => void
   onNeedAuth: () => void
 }
+
 
 function decodeJwt(token: string): Record<string, unknown> | null {
   try {
@@ -26,6 +28,8 @@ export default function ProfilePage({ token, username, onNavigate, onBook, onLog
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [loading, setLoading] = useState(false)
   const [pendingEventId, setPendingEventId] = useState<string | null>(null)
+  const [detailTicket, setDetailTicket] = useState<Ticket | null>(null)
+  const [detailEvent, setDetailEvent] = useState<Event | null>(null)
 
   const jwt = decodeJwt(token)
   const role = (jwt?.role as string) ?? 'user'
@@ -53,12 +57,20 @@ export default function ProfilePage({ token, username, onNavigate, onBook, onLog
     setPendingEventId(ticket.id)
     try {
       const res = await getEvent(ticket.event_id)
-      onBook(res.data)
+      setDetailEvent(res.data)
+      setDetailTicket(ticket)
     } catch {
-      // silently fail — event may be deleted
+      setDetailEvent(null)
+      setDetailTicket(ticket)
     } finally {
       setPendingEventId(null)
     }
+  }
+
+  function handleTicketCancelled(id: string) {
+    setTickets(ts => ts.map(t => t.id === id ? { ...t, status: 'cancelled' as const } : t))
+    setDetailTicket(null)
+    setDetailEvent(null)
   }
 
   const ROLE_BADGE: Record<string, string> = {
@@ -68,6 +80,7 @@ export default function ProfilePage({ token, username, onNavigate, onBook, onLog
   }
 
   return (
+    <>
     <div className="max-w-2xl mx-auto space-y-6">
       {/* Profile card */}
       <div className="bg-slate-800 border border-slate-700/50 rounded-2xl overflow-hidden">
@@ -191,5 +204,17 @@ export default function ProfilePage({ token, username, onNavigate, onBook, onLog
         )}
       </div>
     </div>
+
+    {detailTicket && (
+      <TicketDetailModal
+        ticket={detailTicket}
+        event={detailEvent}
+        token={token}
+        onClose={() => { setDetailTicket(null); setDetailEvent(null) }}
+        onCancelled={handleTicketCancelled}
+        onAddMore={ev => { setDetailTicket(null); setDetailEvent(null); onBook(ev) }}
+      />
+    )}
+    </>
   )
 }

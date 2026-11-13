@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Event, Ticket } from '../types'
-import { getMyTickets, cancelTicket, getEvent } from '../api/client'
+import { getMyTickets, getEvent } from '../api/client'
+import TicketDetailModal from './TicketDetailModal'
 
 interface Props {
   token: string
@@ -25,8 +26,9 @@ export default function MyTickets({ token, onNeedAuth, onBook }: Props) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [cancelling, setCancelling] = useState<string | null>(null)
-  const [pendingEventId, setPendingEventId] = useState<string | null>(null)
+  const [pendingId, setPendingId] = useState<string | null>(null)
+  const [detailTicket, setDetailTicket] = useState<Ticket | null>(null)
+  const [detailEvent, setDetailEvent] = useState<Event | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -45,30 +47,24 @@ export default function MyTickets({ token, onNeedAuth, onBook }: Props) {
 
   useEffect(() => { load() }, [load])
 
-  async function handleCancel(ticketId: string) {
-    setCancelling(ticketId)
+  async function handleTicketClick(ticket: Ticket) {
+    if (pendingId) return
+    setPendingId(ticket.id)
     try {
-      await cancelTicket(ticketId, token)
-      await load()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to cancel'
-      setError(msg)
+      const res = await getEvent(ticket.event_id)
+      setDetailEvent(res.data)
+    } catch {
+      setDetailEvent(null)
     } finally {
-      setCancelling(null)
+      setDetailTicket(ticket)
+      setPendingId(null)
     }
   }
 
-  async function handleViewEvent(ticket: Ticket) {
-    if (pendingEventId) return
-    setPendingEventId(ticket.id)
-    try {
-      const res = await getEvent(ticket.event_id)
-      onBook(res.data)
-    } catch {
-      // silently fail
-    } finally {
-      setPendingEventId(null)
-    }
+  function handleCancelled(id: string) {
+    setTickets(ts => ts.map(t => t.id === id ? { ...t, status: 'cancelled' as const } : t))
+    setDetailTicket(null)
+    setDetailEvent(null)
   }
 
   if (loading) {
@@ -82,22 +78,18 @@ export default function MyTickets({ token, onNeedAuth, onBook }: Props) {
   }
 
   return (
+    <>
     <div>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-white">My Tickets</h2>
-        <button onClick={load}
-          className="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1.5">
-          ↻ Refresh
-        </button>
+        <button onClick={load} className="text-sm text-slate-400 hover:text-white transition-colors">↻ Refresh</button>
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl p-4 mb-4 text-sm">
-          {error}
-        </div>
+        <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl p-4 mb-4 text-sm">{error}</div>
       )}
 
-      {!loading && tickets.length === 0 && !error && (
+      {tickets.length === 0 && !loading && !error && (
         <div className="text-center py-24 text-slate-500">
           <div className="text-5xl mb-4">🎟️</div>
           <div className="text-lg">No tickets yet</div>
@@ -109,26 +101,22 @@ export default function MyTickets({ token, onNeedAuth, onBook }: Props) {
         {tickets.map(ticket => (
           <div key={ticket.id}
             className="bg-slate-800 border border-slate-700/50 rounded-xl p-4 flex gap-4 items-start hover:border-slate-600 transition-all">
-
-            {/* Ticket tear line decoration */}
             <div className="hidden sm:flex flex-col items-center pt-1">
-              <div className="w-10 h-10 rounded-full bg-brand-600/20 flex items-center justify-center text-xl">
-                🎟️
-              </div>
+              <div className="w-10 h-10 rounded-full bg-brand-600/20 flex items-center justify-center text-xl">🎟️</div>
               <div className="w-px flex-1 border-l border-dashed border-slate-600 mt-2" />
             </div>
 
             <div className="flex-1 min-w-0">
               <button
-                onClick={() => handleViewEvent(ticket)}
-                disabled={pendingEventId !== null}
+                onClick={() => handleTicketClick(ticket)}
+                disabled={pendingId !== null}
                 className="w-full text-left group disabled:opacity-60"
               >
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div>
                     <h3 className="font-semibold text-white leading-tight group-hover:text-brand-400 transition-colors">
                       {ticket.event_title}
-                      {pendingEventId === ticket.id
+                      {pendingId === ticket.id
                         ? <span className="ml-2 text-xs text-slate-500 font-normal">loading…</span>
                         : <span className="ml-1.5 text-slate-500 text-xs group-hover:text-brand-400 transition-colors">↗</span>}
                     </h3>
@@ -145,29 +133,30 @@ export default function MyTickets({ token, onNeedAuth, onBook }: Props) {
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                 {ticket.event_starts_at && <span>📅 {fmtDate(ticket.event_starts_at)}</span>}
                 {ticket.seat_number && <span>💺 {ticket.seat_number}</span>}
-                <span className="text-brand-400 font-medium">
-                  {ticket.price === 0 ? 'Free' : `$${ticket.price}`}
-                </span>
+                <span className="text-brand-400 font-medium">{ticket.price === 0 ? 'Free' : `$${ticket.price}`}</span>
               </div>
 
               <div className="mt-2 flex items-center gap-2">
                 <span className="text-xs text-slate-500 font-mono bg-slate-700 px-2 py-0.5 rounded">
                   #{ticket.id.slice(0, 8)}
                 </span>
-                {ticket.status === 'confirmed' && (
-                  <button
-                    onClick={() => handleCancel(ticket.id)}
-                    disabled={cancelling === ticket.id}
-                    className="text-xs text-slate-500 hover:text-red-400 transition-colors disabled:opacity-50 ml-auto"
-                  >
-                    {cancelling === ticket.id ? 'Cancelling…' : 'Cancel ticket'}
-                  </button>
-                )}
               </div>
             </div>
           </div>
         ))}
       </div>
     </div>
+
+    {detailTicket && (
+      <TicketDetailModal
+        ticket={detailTicket}
+        event={detailEvent}
+        token={token}
+        onClose={() => { setDetailTicket(null); setDetailEvent(null) }}
+        onCancelled={handleCancelled}
+        onAddMore={ev => { setDetailTicket(null); setDetailEvent(null); onBook(ev) }}
+      />
+    )}
+    </>
   )
 }
