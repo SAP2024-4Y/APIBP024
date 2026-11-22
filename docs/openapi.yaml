@@ -3,11 +3,141 @@ info:
   title: TicketSphere Events & Ticketing API
   version: '1.0.0'
   description: |
-    Production-grade REST API for Events & Ticketing.
-    Exposes List, Map (geospatial), and Calendar (temporal) patterns
-    alongside full CRUD for events, venues, and tickets.
+    # TicketSphere API
 
-    **Authentication:** Bearer JWT — obtain a token via `POST /api/v1/auth/token`.
+    Production-grade REST API for Events & Ticketing. Browse events, book tickets,
+    explore venues on a map, and manage your bookings — all through a consistent,
+    cursor-paginated REST interface.
+
+    ---
+
+    ## Quick-Start Flow
+
+    ```
+    1. POST /api/v1/auth/token     →  obtain a Bearer token
+    2. GET  /api/v1/events         →  browse published events  (no token needed)
+    3. GET  /api/v1/events/{id}    →  view event details       (no token needed)
+    4. POST /api/v1/tickets        →  book a ticket            (token required)
+    5. GET  /api/v1/tickets        →  view your bookings       (token required)
+    6. DELETE /api/v1/tickets/{id} →  cancel a booking         (token required)
+    ```
+
+    ---
+
+    ## Roles & Permissions
+
+    | Role | Allowed actions |
+    |---|---|
+    | **Public** (no token) | Browse events, venues, categories; map & calendar search |
+    | **Attendee** | + Book tickets, view own tickets, cancel own tickets |
+    | **Organizer** | + Create events and venues, update own events |
+    | **Admin** | Everything — cancel any event, delete venues, view all tickets |
+
+    Set the token using the **Authorize** button (top-right) with the format: `Bearer <token>`
+
+    ---
+
+    ## Authentication
+
+    Protected endpoints require a `Bearer` JWT in the `Authorization` header:
+
+    ```
+    Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    ```
+
+    Tokens expire after **24 hours** (`expires_in: 86400`). Re-authenticate to get a fresh token.
+
+    ---
+
+    ## Pagination
+
+    List endpoints use **cursor-based keyset pagination** for consistent performance at scale:
+
+    ```
+    # First page
+    GET /api/v1/events?limit=10
+
+    # Next page — use next_cursor from the previous response
+    GET /api/v1/events?limit=10&after=eyJmaWVsZCI6InN0YXJ0c19hdCJ9
+    ```
+
+    Every paginated response includes:
+    ```json
+    {
+      "pagination": {
+        "limit": 10,
+        "has_more": true,
+        "next_cursor": "eyJmaWVsZCI6InN0YXJ0c19hdCIsInZhbHVlIjoiMjAyNi0xMi0xMFQyMDowMDowMFoiLCJpZCI6ImFiYzEyMyJ9"
+      }
+    }
+    ```
+
+    - `has_more: true` → more pages exist; pass `next_cursor` as `after` to fetch the next page
+    - `has_more: false` → this is the last page; `next_cursor` will be `null`
+
+    ---
+
+    ## Rate Limiting
+
+    | Scope | Limit |
+    |---|---|
+    | General API (`/api/v1/*`, `/graphql`) | **200 requests / 15 minutes** per IP |
+    | Auth (`POST /api/v1/auth/token`) | **20 requests / 15 minutes** per IP |
+
+    Every response includes these headers:
+    - `RateLimit-Limit` — maximum requests allowed in the window
+    - `RateLimit-Remaining` — requests remaining before throttling
+    - `RateLimit-Reset` — Unix timestamp when the window resets
+
+    Exceeding the limit returns `429 RATE_LIMITED`.
+
+    ---
+
+    ## Demo Credentials
+
+    | Username | Password | Role |
+    |---|---|---|
+    | `admin` | `admin-secret-2026` | Admin |
+    | `demo` | `demo-password` | Attendee |
+    | `eventco` | `demo-password` | Organizer |
+    | `livemusic` | `demo-password` | Organizer |
+
+    ---
+
+    ## Error Format
+
+    All errors follow a consistent envelope:
+
+    ```json
+    {
+      "error": {
+        "code": "EVENT_NOT_FOUND",
+        "message": "Event not found."
+      }
+    }
+    ```
+
+    Use the `code` field for programmatic error handling. See individual endpoints for all possible codes.
+
+    ---
+
+    ## Prices & Currency
+
+    All price fields (`min_price`, `max_price`, `price`) are in **Indian Rupees (INR)** per
+    [ISO 4217](https://www.iso.org/iso-4217-currency-codes.html). Free events have
+    both `min_price: 0` and `max_price: 0`.
+
+    ---
+
+    ## Date & Time
+
+    All datetime fields use **ISO 8601 UTC** format: `YYYY-MM-DDTHH:MM:SSZ`
+
+    Example: `2026-12-15T18:30:00Z` (always include hours, minutes, seconds, and the `Z` timezone suffix).
+
+    Times are stored and returned in UTC. Convert to local time on the client using
+    the browser's `Intl.DateTimeFormat` API.
+
   contact:
     name: Team APIBP024
   license:
@@ -22,15 +152,30 @@ security:
 
 tags:
   - name: Auth
-    description: Authentication endpoints
+    description: |
+      Obtain and manage Bearer JWT tokens.
+
+      **Actors:** Any user (public, attendee, organizer, admin)
   - name: Events
-    description: Event management — List, Map, Calendar
+    description: |
+      Browse, search, create, and manage events.
+
+      **List API** — cursor-paginated event listing with filters and sorting.
+      **Map API** — geospatial proximity and bounding-box search.
+      **Calendar API** — time-window overlap search.
   - name: Venues
-    description: Venue management with geospatial search
+    description: |
+      Manage event venues with geographic coordinates.
+
+      Venues are referenced by events. Each venue has a GeoJSON `location` for map rendering and proximity search.
   - name: Tickets
-    description: Ticket booking and management
+    description: |
+      Book and manage tickets for events.
+
+      **Actors:** Authenticated users (attendee, organizer, admin)
   - name: Categories
-    description: Event category reference
+    description: |
+      Reference list of event categories used for filtering and display.
 
 paths:
   # ── Health ────────────────────────────────────────────────────────────────
@@ -40,13 +185,25 @@ paths:
       operationId: getHealth
       security: []
       tags: [Auth]
+      description: |
+        Returns `200 OK` when the service is running and ready to handle requests.
+
+        **Actor:** Monitoring tools, load balancers, CI pipelines
+        **Use-case:** Infrastructure check → verify the service is alive before routing traffic
+        **Role required:** None (public)
+
+        Used by Docker healthcheck and CI smoke tests.
       responses:
         '200':
-          description: Service is healthy
+          description: Service is healthy and ready
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                service: ticketsphere-api
+                timestamp: '2026-11-22T10:30:00Z'
 
   # ── Auth ──────────────────────────────────────────────────────────────────
   /api/v1/auth/token:
@@ -55,36 +212,102 @@ paths:
       operationId: login
       security: []
       tags: [Auth]
+      description: |
+        Authenticates a user and returns a JWT Bearer token.
+
+        **Actor:** Any registered user (attendee, organizer, admin)
+        **Use-case:** User enters credentials → receives token → uses token for protected endpoints
+        **Role required:** None (public — but credentials must be valid)
+
+        The token expires after **24 hours**. Store it securely and re-authenticate when it expires.
+
+        **Rate limit:** 20 requests per 15 minutes per IP to prevent brute-force attacks.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/LoginRequest'
-            example:
-              username: demo
-              password: demo-password
+            examples:
+              attendee:
+                summary: Attendee login
+                value:
+                  username: demo
+                  password: demo-password
+              admin:
+                summary: Admin login
+                value:
+                  username: admin
+                  password: admin-secret-2026
+              organizer:
+                summary: Organizer login
+                value:
+                  username: eventco
+                  password: demo-password
       responses:
         '200':
-          description: Authentication successful
+          description: Authentication successful — token returned
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/TokenResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsInVzZXJuYW1lIjoiZGVtbyIsInJvbGUiOiJhdHRlbmRlZSIsImlhdCI6MTc2NDAwMDAwMCwiZXhwIjoxNzY0MDg2NDAwfQ.signature
+                token_type: Bearer
+                expires_in: 86400
         '401':
-          $ref: '#/components/responses/AuthInvalidCredentials'
+          description: Invalid username or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_INVALID_CREDENTIALS
+                  message: Invalid username or password.
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: Request body is missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: Request validation failed.
+                  details:
+                    - path: [username]
+                      message: Required
         '429':
-          $ref: '#/components/responses/RateLimited'
+          description: Too many login attempts — wait before retrying
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: RATE_LIMITED
+                  message: Too many authentication attempts. Please try again later.
 
   # ── Events — List ─────────────────────────────────────────────────────────
   /api/v1/events:
     get:
-      summary: List events (cursor pagination, filtering, sorting)
+      summary: List events
       operationId: listEvents
       security: []
       tags: [Events]
+      description: |
+        Returns a cursor-paginated list of events with optional filtering and sorting.
+
+        **Actor:** Anyone — website visitors, mobile app, dashboard
+        **Use-case:** User opens the Events page → browses published events with optional filters
+        **Role required:** None (public)
+
+        Results default to `created_at asc`. Use `sort` and `order` to change ordering.
+        Use `after` (the `next_cursor` from the previous response) to page through results.
+
+        **Filter combinations:** All filters are AND-ed together.
+        Example: `?status=published&category=music&max_price=500` returns published music events under ₹500.
       parameters:
         - $ref: '#/components/parameters/status'
         - $ref: '#/components/parameters/category'
@@ -101,43 +324,205 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EventListResponse'
+              example:
+                data:
+                  - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    title: Coldplay Music of the Spheres World Tour
+                    description: Coldplay brings their spectacular world tour to Mumbai.
+                    status: published
+                    category: music
+                    min_price: 1500.00
+                    max_price: 15000.00
+                    venue:
+                      id: ven-001
+                      name: DY Patil Stadium
+                      address: Sector 7, Nerul
+                      city: Mumbai
+                      country: IN
+                      location:
+                        type: Point
+                        coordinates: [73.0169, 19.0450]
+                      capacity: 55000
+                      created_at: '2026-01-01T00:00:00Z'
+                    starts_at: '2026-12-20T19:00:00Z'
+                    ends_at: '2026-12-20T23:00:00Z'
+                    total_seats: 55000
+                    available_seats: 12000
+                    organizer_id: usr-org-001
+                    created_at: '2026-10-01T09:00:00Z'
+                    updated_at: '2026-10-15T12:00:00Z'
+                pagination:
+                  limit: 20
+                  has_more: true
+                  next_cursor: eyJmaWVsZCI6ImNyZWF0ZWRfYXQiLCJ2YWx1ZSI6IjIwMjYtMTAtMDFUMDk6MDA6MDBaIiwiaWQiOiIzZmE4NWY2NCJ9
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: Invalid filter or pagination parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: Request validation failed.
+                  details:
+                    - path: [min_price]
+                      message: Expected number, received string
         '429':
           $ref: '#/components/responses/RateLimited'
     post:
       summary: Create a new event
       operationId: createEvent
       tags: [Events]
+      description: |
+        Creates a new event at an existing venue.
+
+        **Actor:** Organizer or Admin
+        **Use-case:** Organizer logs in → fills event form → submits → event appears in listing
+        **Role required:** Any authenticated user (`attendee`, `organizer`, or `admin`)
+
+        The authenticated user becomes the `organizer_id`. `available_seats` is automatically
+        set to `total_seats` on creation.
+
+        **Validation rules:**
+        - `ends_at` must be after `starts_at`
+        - `venue_id` must reference an existing venue
+        - `max_price` should be ≥ `min_price`
+        - For free events: set both `min_price` and `max_price` to `0`
+        - Prices are in INR (ISO 4217: INR)
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateEventRequest'
+            example:
+              title: Pune Tech Summit 2026
+              description: Annual technology conference covering AI, cloud, and open-source innovation.
+              category: conference
+              status: published
+              min_price: 0
+              max_price: 999.00
+              venue_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+              starts_at: '2026-12-15T10:00:00Z'
+              ends_at: '2026-12-15T18:00:00Z'
+              total_seats: 500
       responses:
         '201':
-          description: Event created
+          description: Event created successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SingleEventResponse'
+              example:
+                data:
+                  id: abc12345-5717-4562-b3fc-2c963f66afa7
+                  title: Pune Tech Summit 2026
+                  description: Annual technology conference covering AI, cloud, and open-source innovation.
+                  status: published
+                  category: conference
+                  min_price: 0
+                  max_price: 999.00
+                  venue:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    name: Phoenix Marketcity Arena
+                    address: Nagar Road, Viman Nagar
+                    city: Pune
+                    country: IN
+                    location:
+                      type: Point
+                      coordinates: [73.9197, 18.5641]
+                    capacity: 2000
+                    created_at: '2026-01-01T00:00:00Z'
+                  starts_at: '2026-12-15T10:00:00Z'
+                  ends_at: '2026-12-15T18:00:00Z'
+                  total_seats: 500
+                  available_seats: 500
+                  organizer_id: usr-org-001
+                  created_at: '2026-11-22T08:00:00Z'
+                  updated_at: '2026-11-22T08:00:00Z'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: No token provided or token expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                missing_token:
+                  summary: No Authorization header
+                  value:
+                    error:
+                      code: AUTH_REQUIRED
+                      message: Authentication required.
+                expired_token:
+                  summary: Token expired or malformed
+                  value:
+                    error:
+                      code: AUTH_INVALID_TOKEN
+                      message: Token is invalid or has expired.
         '404':
-          $ref: '#/components/responses/VenueNotFound'
+          description: The specified venue_id does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VENUE_NOT_FOUND
+                  message: Venue not found.
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: Request body failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                missing_fields:
+                  summary: Required field missing
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed.
+                      details:
+                        - path: [title]
+                          message: Required
+                ends_before_starts:
+                  summary: ends_at before starts_at
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: ends_at must be after starts_at
         '429':
           $ref: '#/components/responses/RateLimited'
 
   # ── Events — Map: Proximity ───────────────────────────────────────────────
   /api/v1/events/nearby:
     get:
-      summary: Find events near a point (proximity / radius search)
+      summary: Find events near a point (Map API — proximity search)
       operationId: nearbyEvents
       security: []
       tags: [Events]
+      description: |
+        Returns all events whose venue is within `radius_km` kilometres of the given coordinates,
+        ordered by distance (nearest first).
+
+        **Actor:** App user viewing the map
+        **Use-case:** User opens the map → browser provides current location → map renders all nearby event pins
+        **Role required:** None (public)
+
+        **Getting the user's current location (browser):**
+        ```javascript
+        navigator.geolocation.getCurrentPosition(pos => {
+          const { latitude, longitude } = pos.coords;
+          fetch(`/api/v1/events/nearby?latitude=${latitude}&longitude=${longitude}&radius_km=25`);
+        });
+        ```
+
+        **Coordinate convention:** GeoJSON `coordinates` are returned as `[longitude, latitude]` —
+        note that longitude comes first (this is the GeoJSON standard, opposite of what many APIs use).
+
+        Returns all matching events within the radius. An empty area returns `data: []`, not a 404.
+        Distance is calculated using the Haversine formula (accurate to ~0.3%).
       parameters:
         - name: latitude
           in: query
@@ -145,70 +530,183 @@ paths:
           schema:
             type: number
             format: double
-          description: Centre point latitude (decimal degrees)
+            minimum: -90
+            maximum: 90
+            example: 19.0760
+          description: Centre-point latitude in decimal degrees (−90 to +90). North is positive.
         - name: longitude
           in: query
           required: true
           schema:
             type: number
             format: double
-          description: Centre point longitude (decimal degrees)
+            minimum: -180
+            maximum: 180
+            example: 72.8777
+          description: Centre-point longitude in decimal degrees (−180 to +180). East is positive.
         - name: radius_km
           in: query
           required: true
           schema:
             type: number
             format: double
-          description: Search radius in kilometres
-        - $ref: '#/components/parameters/limit'
+            minimum: 0.1
+            maximum: 500
+            example: 25
+          description: Search radius in kilometres (0.1–500). Use 25–50 km for city-level searches.
       responses:
         '200':
-          description: Events within the specified radius
+          description: Events within the radius, ordered nearest-first. Empty array if no events found.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/NearbyEventsResponse'
+              example:
+                data:
+                  - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    title: Coldplay Music of the Spheres World Tour
+                    category: music
+                    min_price: 1500.00
+                    max_price: 15000.00
+                    starts_at: '2026-12-20T19:00:00Z'
+                    ends_at: '2026-12-20T23:00:00Z'
+                    available_seats: 12000
+                    distance_km: 4.2
+                    venue:
+                      id: ven-001
+                      name: DY Patil Stadium
+                      city: Mumbai
+                      country: IN
+                      location:
+                        type: Point
+                        coordinates: [73.0169, 19.0450]
+                      capacity: 55000
+                      created_at: '2026-01-01T00:00:00Z'
+                total: 1
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: Missing or invalid coordinate/radius parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                missing_params:
+                  summary: Required parameters missing
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: latitude, longitude, and radius_km are required numbers.
+                radius_too_large:
+                  summary: radius_km exceeds 500
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed.
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   # ── Events — Map: Bounding Box ────────────────────────────────────────────
   /api/v1/events/bbox:
     get:
-      summary: Find events inside a geographic bounding box
+      summary: Find events inside a geographic bounding box (Map API)
       operationId: bboxEvents
       security: []
       tags: [Events]
+      description: |
+        Returns all events whose venue falls within the specified geographic bounding box (rectangle).
+
+        **Actor:** App user panning or zooming the map
+        **Use-case:** User moves the map viewport → app sends the visible bounds → map renders all pins within view
+        **Role required:** None (public)
+
+        **Getting the viewport bounds (Leaflet example):**
+        ```javascript
+        const bounds = map.getBounds();
+        fetch(`/api/v1/events/bbox?min_lat=${bounds.getSouth()}&min_lon=${bounds.getWest()}&max_lat=${bounds.getNorth()}&max_lon=${bounds.getEast()}`);
+        ```
+
+        Returns all matching events in the box, ordered by start date. An empty viewport returns `data: []`, not a 404.
       parameters:
         - name: min_lat
           in: query
           required: true
-          schema: { type: number }
-          description: SW corner latitude
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+            example: 18.89
+          description: South-west corner latitude (minimum latitude of the bounding box)
         - name: min_lon
           in: query
           required: true
-          schema: { type: number }
-          description: SW corner longitude
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+            example: 72.77
+          description: South-west corner longitude (minimum longitude of the bounding box)
         - name: max_lat
           in: query
           required: true
-          schema: { type: number }
-          description: NE corner latitude
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+            example: 19.28
+          description: North-east corner latitude (maximum latitude of the bounding box)
         - name: max_lon
           in: query
           required: true
-          schema: { type: number }
-          description: NE corner longitude
-        - $ref: '#/components/parameters/limit'
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+            example: 73.08
+          description: North-east corner longitude (maximum longitude of the bounding box)
       responses:
         '200':
-          description: Events inside the bounding box
+          description: Events inside the bounding box, ordered by start date. Empty array if none found.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/EventListSimpleResponse'
+              example:
+                data:
+                  - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    title: Coldplay Music of the Spheres World Tour
+                    category: music
+                    min_price: 1500.00
+                    max_price: 15000.00
+                    starts_at: '2026-12-20T19:00:00Z'
+                    ends_at: '2026-12-20T23:00:00Z'
+                    available_seats: 12000
+                    venue:
+                      id: ven-001
+                      name: DY Patil Stadium
+                      city: Mumbai
+                      country: IN
+                      location:
+                        type: Point
+                        coordinates: [73.0169, 19.0450]
+                      capacity: 55000
+                      created_at: '2026-01-01T00:00:00Z'
+                total: 1
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: Missing or invalid bounding box parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: Request validation failed.
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   # ── Events — Calendar ─────────────────────────────────────────────────────
   /api/v1/events/schedule:
@@ -217,6 +715,22 @@ paths:
       operationId: scheduleEvents
       security: []
       tags: [Events]
+      description: |
+        Returns all events that overlap the specified time window, ordered by start date.
+
+        **Actor:** App user viewing the calendar
+        **Use-case:** User navigates to a month → app fetches all events in that month → calendar renders them on correct dates
+        **Role required:** None (public)
+
+        **Overlap logic:** An event overlaps the window if it starts before the window end AND ends after
+        the window start. For example, an event at 20:00–23:00 IS returned for a window of 18:00–21:00.
+
+        **Calendar month example:**
+        ```
+        starts_at=2026-12-01T00:00:00Z&ends_at=2026-12-31T23:59:59Z
+        ```
+
+        Results are paginated — use `after` for windows with many events.
       parameters:
         - name: starts_at
           in: query
@@ -224,52 +738,149 @@ paths:
           schema:
             type: string
             format: date-time
-          description: Window start — ISO 8601 UTC
-          example: '2026-12-01T09:00:00Z'
+            example: '2026-12-01T00:00:00Z'
+          description: Window start — ISO 8601 UTC datetime (e.g. `2026-12-01T00:00:00Z`). Events ending after this are included.
         - name: ends_at
           in: query
           required: true
           schema:
             type: string
             format: date-time
-          description: Window end — ISO 8601 UTC
-          example: '2026-12-31T23:59:59Z'
+            example: '2026-12-31T23:59:59Z'
+          description: Window end — ISO 8601 UTC datetime. Must be after `starts_at`. Events starting before this are included.
         - $ref: '#/components/parameters/status'
         - $ref: '#/components/parameters/category'
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/after'
       responses:
         '200':
-          description: Events overlapping the time window
+          description: Events overlapping the time window, ordered by start date
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScheduleResponse'
+              example:
+                data:
+                  - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    title: Coldplay Music of the Spheres World Tour
+                    category: music
+                    min_price: 1500.00
+                    max_price: 15000.00
+                    starts_at: '2026-12-20T19:00:00Z'
+                    ends_at: '2026-12-20T23:00:00Z'
+                    available_seats: 12000
+                    venue:
+                      id: ven-001
+                      name: DY Patil Stadium
+                      city: Mumbai
+                      country: IN
+                      location:
+                        type: Point
+                        coordinates: [73.0169, 19.0450]
+                      capacity: 55000
+                      created_at: '2026-01-01T00:00:00Z'
+                window:
+                  starts_at: '2026-12-01T00:00:00Z'
+                  ends_at: '2026-12-31T23:59:59Z'
+                pagination:
+                  limit: 50
+                  has_more: false
+                  next_cursor: null
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: Invalid datetime parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                invalid_format:
+                  summary: Date not ISO 8601
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed.
+                ends_before_starts:
+                  summary: ends_at is before starts_at
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: ends_at must be after starts_at
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   # ── Events — Single ───────────────────────────────────────────────────────
   /api/v1/events/{id}:
     get:
-      summary: Get an event by ID
+      summary: Get a single event by ID
       operationId: getEvent
       security: []
       tags: [Events]
+      description: |
+        Returns the full details of a single event including the embedded venue object.
+
+        **Actor:** Anyone — event detail page, ticket purchase flow
+        **Use-case:** User clicks an event card → app fetches full details → shows description, venue map, pricing, seat availability
+        **Role required:** None (public)
       parameters:
         - $ref: '#/components/parameters/id'
       responses:
         '200':
-          description: Event details
+          description: Event found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SingleEventResponse'
+              example:
+                data:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  title: Coldplay Music of the Spheres World Tour
+                  description: Coldplay brings their spectacular world tour to Mumbai for two unforgettable nights.
+                  status: published
+                  category: music
+                  min_price: 1500.00
+                  max_price: 15000.00
+                  venue:
+                    id: ven-001
+                    name: DY Patil Stadium
+                    address: Sector 7, Nerul
+                    city: Mumbai
+                    country: IN
+                    location:
+                      type: Point
+                      coordinates: [73.0169, 19.0450]
+                    capacity: 55000
+                    created_at: '2026-01-01T00:00:00Z'
+                  starts_at: '2026-12-20T19:00:00Z'
+                  ends_at: '2026-12-20T23:00:00Z'
+                  total_seats: 55000
+                  available_seats: 12000
+                  organizer_id: usr-org-001
+                  created_at: '2026-10-01T09:00:00Z'
+                  updated_at: '2026-10-15T12:00:00Z'
         '404':
-          $ref: '#/components/responses/EventNotFound'
+          description: No event with the given ID exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: EVENT_NOT_FOUND
+                  message: Event not found.
+        '429':
+          $ref: '#/components/responses/RateLimited'
     put:
       summary: Update an event
       operationId: updateEvent
       tags: [Events]
+      description: |
+        Updates one or more fields of an existing event. All fields are optional — send only what you want to change.
+
+        **Actor:** The event's organizer or an Admin
+        **Use-case:** Organizer edits event details → updates title, description, pricing, or reschedules the event
+        **Role required:** `organizer` (own events only) or `admin` (any event)
+
+        Attempting to edit another organizer's event returns `403 FORBIDDEN`.
       parameters:
         - $ref: '#/components/parameters/id'
       requestBody:
@@ -278,25 +889,68 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateEventRequest'
+            example:
+              title: Coldplay Music of the Spheres — Night 2
+              max_price: 18000.00
       responses:
         '200':
-          description: Updated event
+          description: Event updated successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SingleEventResponse'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                missing_token:
+                  value:
+                    error:
+                      code: AUTH_REQUIRED
+                      message: Authentication required.
+                expired_token:
+                  value:
+                    error:
+                      code: AUTH_INVALID_TOKEN
+                      message: Token is invalid or has expired.
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: Authenticated but not the event owner or admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: You do not have permission to perform this action.
         '404':
-          $ref: '#/components/responses/EventNotFound'
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: EVENT_NOT_FOUND
+                  message: Event not found.
         '422':
           $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
     delete:
-      summary: Cancel an event
+      summary: Cancel an event (sets status to cancelled)
       operationId: cancelEvent
       tags: [Events]
+      description: |
+        Cancels an event by setting its `status` to `cancelled`. This is a **soft delete** — the event
+        record is preserved but marked as cancelled. Cancelled events cannot be booked.
+
+        **Actor:** The event's organizer or an Admin
+        **Use-case:** Organizer cancels an event → attendees can no longer book tickets
+        **Role required:** `organizer` (own events only) or `admin` (any event)
       parameters:
         - $ref: '#/components/parameters/id'
       responses:
@@ -310,14 +964,48 @@ paths:
                   data:
                     type: object
                     properties:
-                      id: { type: string }
-                      status: { type: string, example: cancelled }
+                      id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        example: cancelled
+              example:
+                data:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  status: cancelled
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: Not the event owner or admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: You do not have permission to perform this action.
         '404':
-          $ref: '#/components/responses/EventNotFound'
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: EVENT_NOT_FOUND
+                  message: Event not found.
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   # ── Venues ────────────────────────────────────────────────────────────────
   /api/v1/venues:
@@ -326,6 +1014,12 @@ paths:
       operationId: listVenues
       security: []
       tags: [Venues]
+      description: |
+        Returns a paginated list of all venues, ordered alphabetically by name.
+
+        **Actor:** Anyone — event creation form, venue browser
+        **Use-case:** Organizer creates an event → picks a venue from the list
+        **Role required:** None (public)
       parameters:
         - $ref: '#/components/parameters/limit'
       responses:
@@ -335,74 +1029,276 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VenueListResponse'
+              example:
+                data:
+                  - id: ven-001
+                    name: DY Patil Stadium
+                    address: Sector 7, Nerul
+                    city: Mumbai
+                    country: IN
+                    location:
+                      type: Point
+                      coordinates: [73.0169, 19.0450]
+                    capacity: 55000
+                    created_at: '2026-01-01T00:00:00Z'
+                total: 12
+        '429':
+          $ref: '#/components/responses/RateLimited'
     post:
-      summary: Create a venue
+      summary: Create a new venue
       operationId: createVenue
       tags: [Venues]
+      description: |
+        Creates a new venue with a geographic location.
+
+        **Actor:** Organizer or Admin
+        **Use-case:** Organizer wants to host an event at a new venue → first registers the venue → then creates the event
+        **Role required:** Any authenticated user
+
+        `country` must be an ISO 3166-1 alpha-2 code (e.g. `IN` for India, `US` for United States).
+        `latitude` and `longitude` are used for map rendering and proximity search.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateVenueRequest'
+            example:
+              name: Jawaharlal Nehru Stadium
+              address: Pragati Vihar, Lodhi Road
+              city: New Delhi
+              country: IN
+              latitude: 28.5665
+              longitude: 77.2374
+              capacity: 75000
       responses:
         '201':
-          description: Venue created
+          description: Venue created successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SingleVenueResponse'
+              example:
+                data:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  name: Jawaharlal Nehru Stadium
+                  address: Pragati Vihar, Lodhi Road
+                  city: New Delhi
+                  country: IN
+                  location:
+                    type: Point
+                    coordinates: [77.2374, 28.5665]
+                  capacity: 75000
+                  created_at: '2026-11-22T08:00:00Z'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
+  # ── Venues — Search ───────────────────────────────────────────────────────
+  /api/v1/venues/search:
+    get:
+      summary: Search venues by name or city
+      operationId: searchVenues
+      security: []
+      tags: [Venues]
+      description: |
+        Searches venues by name or city using a partial text match (case-insensitive). Returns up to 50 results.
+
+        **Actor:** Anyone — event creation form, search bar
+        **Use-case:** Organizer types "Mumbai" in the venue search box → gets all Mumbai venues instantly
+        **Role required:** None (public)
+
+        The `q` parameter is matched against both `name` and `city` fields simultaneously.
+        Example: `?q=stadium` returns all venues with "stadium" anywhere in their name.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            example: Mumbai
+          description: Search query (minimum 1 character). Matched case-insensitively against venue name and city.
+      responses:
+        '200':
+          description: Venues matching the search query (up to 50)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VenueListResponse'
+              example:
+                data:
+                  - id: ven-001
+                    name: DY Patil Stadium
+                    address: Sector 7, Nerul
+                    city: Mumbai
+                    country: IN
+                    location:
+                      type: Point
+                      coordinates: [73.0169, 19.0450]
+                    capacity: 55000
+                    created_at: '2026-01-01T00:00:00Z'
+                total: 1
+        '422':
+          description: Search query is missing or empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: 'Query parameter "q" is required.'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ── Venues — Nearby ───────────────────────────────────────────────────────
   /api/v1/venues/nearby:
     get:
       summary: Find venues near a point
       operationId: nearbyVenues
       security: []
       tags: [Venues]
+      description: |
+        Returns all venues within a given radius of a point, ordered by distance (nearest first).
+
+        **Actor:** Anyone — venue map, event creation
+        **Use-case:** Organizer wants to find a venue near their location → pass current coordinates
+        **Role required:** None (public)
+
+        Uses the same Haversine distance calculation as the events proximity search.
       parameters:
         - name: latitude
           in: query
           required: true
-          schema: { type: number }
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+            example: 19.0760
+          description: Centre-point latitude in decimal degrees
         - name: longitude
           in: query
           required: true
-          schema: { type: number }
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+            example: 72.8777
+          description: Centre-point longitude in decimal degrees
         - name: radius_km
           in: query
           required: true
-          schema: { type: number }
+          schema:
+            type: number
+            format: double
+            minimum: 0.1
+            maximum: 500
+            example: 25
+          description: Search radius in kilometres (0.1–500)
       responses:
         '200':
-          description: Venues within the radius
+          description: Venues within the radius, ordered nearest-first
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/NearbyVenuesResponse'
+              example:
+                data:
+                  - id: ven-001
+                    name: DY Patil Stadium
+                    address: Sector 7, Nerul
+                    city: Mumbai
+                    country: IN
+                    location:
+                      type: Point
+                      coordinates: [73.0169, 19.0450]
+                    capacity: 55000
+                    created_at: '2026-01-01T00:00:00Z'
+                    distance_km: 4.2
+                total: 1
+        '422':
+          description: Missing or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: latitude, longitude, and radius_km are required numbers.
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
+  # ── Venues — Single ───────────────────────────────────────────────────────
   /api/v1/venues/{id}:
     get:
       summary: Get a venue by ID
       operationId: getVenue
       security: []
       tags: [Venues]
+      description: |
+        Returns full details of a single venue including GeoJSON location.
+
+        **Actor:** Anyone — venue detail page, event creation form
+        **Use-case:** Organizer selects a venue → app loads full details including capacity and map coordinates
+        **Role required:** None (public)
       parameters:
         - $ref: '#/components/parameters/id'
       responses:
         '200':
-          description: Venue details
+          description: Venue found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SingleVenueResponse'
+              example:
+                data:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  name: DY Patil Stadium
+                  address: Sector 7, Nerul
+                  city: Mumbai
+                  country: IN
+                  location:
+                    type: Point
+                    coordinates: [73.0169, 19.0450]
+                  capacity: 55000
+                  created_at: '2026-01-01T00:00:00Z'
         '404':
-          $ref: '#/components/responses/VenueNotFound'
+          description: Venue not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VENUE_NOT_FOUND
+                  message: Venue not found.
+        '429':
+          $ref: '#/components/responses/RateLimited'
     put:
       summary: Update a venue
       operationId: updateVenue
       tags: [Venues]
+      description: |
+        Updates one or more fields of an existing venue. All fields are optional.
+
+        **Actor:** Organizer or Admin
+        **Use-case:** Admin corrects a venue's address or updates its capacity after a renovation
+        **Role required:** `organizer` or `admin`
       parameters:
         - $ref: '#/components/parameters/id'
       requestBody:
@@ -411,26 +1307,183 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateVenueRequest'
+            example:
+              capacity: 60000
       responses:
         '200':
-          description: Updated venue
+          description: Venue updated successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SingleVenueResponse'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: Not an organizer or admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: You do not have permission to perform this action.
         '404':
-          $ref: '#/components/responses/VenueNotFound'
+          description: Venue not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VENUE_NOT_FOUND
+                  message: Venue not found.
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      summary: Delete a venue (admin only)
+      operationId: deleteVenue
+      tags: [Venues]
+      description: |
+        Permanently deletes a venue. **Blocked** if the venue has any `published` or `draft` events.
+
+        **Actor:** Admin only
+        **Use-case:** Admin removes a decommissioned venue that has no active events
+        **Role required:** `admin` only
+
+        Returns `204 No Content` on success (empty body).
+
+        **Why is deletion blocked when active events exist?** Deleting a venue with active events
+        would orphan those events, breaking the event detail page and all associated tickets.
+        Cancel or complete all events at the venue before attempting deletion.
+      parameters:
+        - $ref: '#/components/parameters/id'
+      responses:
+        '204':
+          description: Venue deleted successfully (no body returned)
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
+        '403':
+          description: Caller is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: You do not have permission to perform this action.
+        '404':
+          description: Venue not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VENUE_NOT_FOUND
+                  message: Venue not found.
+        '422':
+          description: Venue has active or draft events — cancel or complete them first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: Cannot delete a venue that has active or draft events.
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ── Venues — Events at Venue ──────────────────────────────────────────────
+  /api/v1/venues/{id}/events:
+    get:
+      summary: List all events at a venue
+      operationId: eventsByVenue
+      security: []
+      tags: [Venues]
+      description: |
+        Returns all events held at the specified venue, ordered by start date (soonest first).
+
+        **Actor:** Anyone — venue detail page, event discovery
+        **Use-case:** User views a venue profile → sees all upcoming events at that venue
+        **Role required:** None (public)
+
+        Use the optional `status` filter to show only published (bookable) events and hide drafts or cancelled events.
+      parameters:
+        - $ref: '#/components/parameters/id'
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [draft, published, cancelled, completed]
+          description: Filter events by status. Omit to return events of all statuses.
+      responses:
+        '200':
+          description: Events at the venue ordered by start date. Empty array if none found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventListSimpleResponse'
+              example:
+                data:
+                  - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    title: Coldplay Music of the Spheres World Tour
+                    status: published
+                    category: music
+                    min_price: 1500.00
+                    max_price: 15000.00
+                    starts_at: '2026-12-20T19:00:00Z'
+                    ends_at: '2026-12-20T23:00:00Z'
+                    available_seats: 12000
+                total: 1
+        '404':
+          description: Venue not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: VENUE_NOT_FOUND
+                  message: Venue not found.
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   # ── Tickets ───────────────────────────────────────────────────────────────
   /api/v1/tickets:
     get:
-      summary: List tickets (own tickets; all for admins)
+      summary: List tickets
       operationId: listTickets
       tags: [Tickets]
+      description: |
+        Returns the authenticated user's tickets. Admins see all tickets on the platform.
+
+        **Actor:** Authenticated attendee or Admin
+        **Use-case:** Attendee opens "My Tickets" → sees all their bookings; Admin audits all platform bookings
+        **Role required:** `attendee` / `organizer` (own tickets), `admin` (all tickets)
+
+        Results are cursor-paginated — use `after` to page through large ticket lists.
       parameters:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/after'
@@ -441,58 +1494,237 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TicketListResponse'
+              example:
+                data:
+                  - id: tkt-001
+                    event_id: evt-001
+                    event_title: Coldplay Music of the Spheres World Tour
+                    user_id: usr-001
+                    status: confirmed
+                    price: 3500.00
+                    seat_number: GA-4521
+                    booked_at: '2026-11-01T14:30:00Z'
+                    cancelled_at: null
+                pagination:
+                  limit: 20
+                  has_more: false
+                  next_cursor: null
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                missing_token:
+                  value:
+                    error:
+                      code: AUTH_REQUIRED
+                      message: Authentication required.
+                expired_token:
+                  value:
+                    error:
+                      code: AUTH_INVALID_TOKEN
+                      message: Token is invalid or has expired.
+        '429':
+          $ref: '#/components/responses/RateLimited'
     post:
       summary: Book ticket(s) for an event
       operationId: bookTicket
       tags: [Tickets]
+      description: |
+        Books one or more tickets for the specified event. Each ticket is assigned a unique seat number.
+
+        **Actor:** Authenticated attendee
+        **Use-case:** Attendee selects an event → chooses quantity → completes payment → tickets are issued
+        **Role required:** Any authenticated user (`attendee`, `organizer`, `admin`)
+
+        **Booking rules:**
+        - `quantity` defaults to `1` if omitted; maximum `10` per request
+        - The event must be `published` with sufficient `available_seats`
+        - `available_seats` decrements atomically for each ticket booked
+        - Prices are fixed in INR (ISO 4217) at the time of booking
+
+        Returns an array of created tickets (length equals `quantity`).
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/BookTicketRequest'
+            examples:
+              single:
+                summary: Book 1 ticket
+                value:
+                  event_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  quantity: 1
+              multiple:
+                summary: Book 3 tickets
+                value:
+                  event_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  quantity: 3
       responses:
         '201':
-          description: Tickets booked
+          description: Tickets booked successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BookTicketResponse'
+              example:
+                data:
+                  - id: tkt-001
+                    event_id: evt-001
+                    event_title: Coldplay Music of the Spheres World Tour
+                    user_id: usr-001
+                    status: confirmed
+                    price: 3500.00
+                    seat_number: GA-4521
+                    booked_at: '2026-11-22T10:30:00Z'
+                    cancelled_at: null
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
         '404':
-          $ref: '#/components/responses/EventNotFound'
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: EVENT_NOT_FOUND
+                  message: Event not found.
         '409':
-          $ref: '#/components/responses/BookingConflict'
+          description: Cannot book — event is sold out or cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                sold_out:
+                  summary: No seats remaining
+                  value:
+                    error:
+                      code: EVENT_SOLD_OUT
+                      message: This event has no available seats.
+                cancelled:
+                  summary: Event was cancelled
+                  value:
+                    error:
+                      code: EVENT_CANCELLED
+                      message: Cannot book a ticket for a cancelled event.
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              examples:
+                missing_event_id:
+                  summary: Missing event_id
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed.
+                      details:
+                        - path: [event_id]
+                          message: Required
+                quantity_exceeded:
+                  summary: Quantity over 10
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Request validation failed.
+                      details:
+                        - path: [quantity]
+                          message: Number must be less than or equal to 10
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   /api/v1/tickets/{id}:
     get:
-      summary: Get a ticket by ID
+      summary: Get a single ticket by ID
       operationId: getTicket
       tags: [Tickets]
+      description: |
+        Returns full details of a single ticket including seat number and booking timestamp.
+
+        **Actor:** The ticket owner or an Admin
+        **Use-case:** Attendee taps a ticket in "My Tickets" → sees full booking details including seat number
+        **Role required:** `attendee` (own ticket only), `admin` (any ticket)
+
+        Returns `403 FORBIDDEN` if you try to view another user's ticket.
       parameters:
         - $ref: '#/components/parameters/id'
       responses:
         '200':
-          description: Ticket details
+          description: Ticket found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SingleTicketResponse'
+              example:
+                data:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  event_id: evt-001
+                  event_title: Coldplay Music of the Spheres World Tour
+                  user_id: usr-001
+                  status: confirmed
+                  price: 3500.00
+                  seat_number: GA-4521
+                  booked_at: '2026-11-01T14:30:00Z'
+                  cancelled_at: null
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: Ticket belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: You do not have permission to perform this action.
         '404':
-          $ref: '#/components/responses/TicketNotFound'
+          description: Ticket not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: TICKET_NOT_FOUND
+                  message: Ticket not found.
+        '429':
+          $ref: '#/components/responses/RateLimited'
     delete:
       summary: Cancel a ticket
       operationId: cancelTicket
       tags: [Tickets]
+      description: |
+        Cancels a ticket by setting its `status` to `cancelled`. The event's `available_seats` is incremented automatically.
+
+        **Actor:** The ticket owner or an Admin
+        **Use-case:** Attendee can no longer attend → cancels ticket → seat is released for others
+        **Role required:** `attendee` (own ticket), `admin` (any ticket)
+
+        A ticket can only be cancelled once. Cancelling an already-cancelled ticket returns `409 TICKET_ALREADY_CANCELLED`.
       parameters:
         - $ref: '#/components/parameters/id'
       responses:
@@ -506,17 +1738,62 @@ paths:
                   data:
                     type: object
                     properties:
-                      id: { type: string }
-                      status: { type: string, example: cancelled }
-                      cancelled_at: { type: string, format: date-time }
+                      id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        example: cancelled
+                      cancelled_at:
+                        type: string
+                        format: date-time
+              example:
+                data:
+                  id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  status: cancelled
+                  cancelled_at: '2026-11-22T15:00:00Z'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: Ticket belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: You do not have permission to perform this action.
         '404':
-          $ref: '#/components/responses/TicketNotFound'
+          description: Ticket not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: TICKET_NOT_FOUND
+                  message: Ticket not found.
         '409':
-          $ref: '#/components/responses/TicketAlreadyCancelled'
+          description: Ticket is already cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+              example:
+                error:
+                  code: TICKET_ALREADY_CANCELLED
+                  message: This ticket has already been cancelled.
+        '429':
+          $ref: '#/components/responses/RateLimited'
 
   # ── Categories ────────────────────────────────────────────────────────────
   /api/v1/categories:
@@ -525,9 +1802,17 @@ paths:
       operationId: listCategories
       security: []
       tags: [Categories]
+      description: |
+        Returns the fixed list of event categories used for filtering and display.
+
+        **Actor:** Anyone — filter UI, event creation form
+        **Use-case:** App loads the category filter dropdown → fetches available categories
+        **Role required:** None (public)
+
+        Categories are fixed (not user-defined). Use these exact `id` values in the `category` filter parameter.
       responses:
         '200':
-          description: Category list
+          description: Full list of event categories
           content:
             application/json:
               schema:
@@ -537,6 +1822,35 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Category'
+              example:
+                data:
+                  - id: music
+                    label: Music
+                    description: Concerts, live performances, music festivals
+                  - id: sports
+                    label: Sports
+                    description: Matches, tournaments, athletic events
+                  - id: tech
+                    label: Tech
+                    description: Hackathons, tech meetups, demos
+                  - id: food
+                    label: Food
+                    description: Food festivals, tastings, cooking events
+                  - id: art
+                    label: Art
+                    description: Exhibitions, gallery openings, art fairs
+                  - id: comedy
+                    label: Comedy
+                    description: Stand-up shows, improv nights
+                  - id: theatre
+                    label: Theatre
+                    description: Plays, musicals, drama performances
+                  - id: conference
+                    label: Conference
+                    description: Professional conferences, seminars, workshops
+                  - id: other
+                    label: Other
+                    description: Events that do not fit other categories
 
 # ── Components ──────────────────────────────────────────────────────────────
 components:
@@ -545,40 +1859,71 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: |
+        JWT Bearer token obtained from `POST /api/v1/auth/token`.
+        Include in every protected request: `Authorization: Bearer <token>`
+        Tokens expire after 24 hours.
 
   parameters:
     id:
       name: id
       in: path
       required: true
-      schema: { type: string, format: uuid }
+      schema:
+        type: string
+        format: uuid
+        example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+      description: Resource UUID (from a previous list or create response)
     status:
       name: status
       in: query
       schema:
         type: string
         enum: [draft, published, cancelled, completed]
+      description: |
+        Filter by event lifecycle status:
+        - `draft` — created but not yet public
+        - `published` — visible and bookable by attendees
+        - `cancelled` — event was cancelled; booking is closed
+        - `completed` — event has ended
     category:
       name: category
       in: query
       schema:
         type: string
         enum: [music, sports, tech, food, art, comedy, theatre, conference, other]
+      description: Filter by event category. See `GET /api/v1/categories` for descriptions of each.
     min_price:
       name: min_price
       in: query
-      schema: { type: number, format: double }
+      schema:
+        type: number
+        format: double
+        minimum: 0
+        example: 0
+      description: Return events with `min_price` ≥ this value (INR). Use `0` to include free events.
     max_price:
       name: max_price
       in: query
-      schema: { type: number, format: double }
+      schema:
+        type: number
+        format: double
+        minimum: 0
+        example: 1000
+      description: Return events with `max_price` ≤ this value (INR). Useful for budget filtering.
     sort:
       name: sort
       in: query
       schema:
         type: string
-        enum: [title, min_price, max_price, starts_at, ends_at, created_at, available_seats]
+        enum: [starts_at, min_price, available_seats, created_at]
         default: created_at
+      description: |
+        Field to sort results by (default: `created_at`):
+        - `starts_at` — sort by event date (best for calendar/upcoming views)
+        - `min_price` — sort by cheapest ticket price (ascending = cheapest first)
+        - `available_seats` — sort by remaining seat capacity
+        - `created_at` — sort by when the event was added to the platform (default)
     order:
       name: order
       in: query
@@ -586,6 +1931,10 @@ components:
         type: string
         enum: [asc, desc]
         default: asc
+      description: |
+        Sort direction (default: `asc`):
+        - `asc` — ascending: earliest first, cheapest first, lowest seats first, oldest first
+        - `desc` — descending: latest first, most expensive first, most seats first, newest first
     limit:
       name: limit
       in: query
@@ -594,44 +1943,95 @@ components:
         minimum: 1
         maximum: 100
         default: 20
+        example: 20
+      description: Number of results per page (default `20`, max `100`). Use with `after` for cursor pagination.
     after:
       name: after
       in: query
-      description: Opaque cursor for keyset pagination
-      schema: { type: string }
+      schema:
+        type: string
+        example: eyJmaWVsZCI6InN0YXJ0c19hdCIsInZhbHVlIjoiMjAyNi0xMi0xMFQyMDowMDowMFoiLCJpZCI6ImFiYzEyMyJ9
+      description: |
+        Opaque cursor for the next page. Copy the `next_cursor` value from the previous response's
+        `pagination` object. Do not construct or decode this value.
 
   schemas:
     # ── Primitives ──────────────────────────────────────────────────────────
     GeoPoint:
       type: object
+      description: |
+        GeoJSON Point geometry representing a geographic coordinate.
+
+        ⚠️ **Coordinate order is `[longitude, latitude]`** — this is the GeoJSON standard and is
+        the **opposite** of what many APIs and mapping libraries use by default.
+
+        Example: Mumbai `[72.8777, 19.0760]` = `[longitude=72.8777, latitude=19.0760]`
       properties:
         type:
           type: string
           example: Point
+          description: Always `"Point"` for a single coordinate.
         coordinates:
           type: array
-          items: { type: number }
-          description: '[longitude, latitude] per GeoJSON spec'
-          example: [-73.9934, 40.7505]
+          items:
+            type: number
+            format: double
+          minItems: 2
+          maxItems: 2
+          description: '`[longitude, latitude]` in decimal degrees. Longitude: −180 to +180. Latitude: −90 to +90.'
+          example: [72.8777, 19.0760]
       required: [type, coordinates]
 
     Pagination:
       type: object
+      description: Cursor pagination metadata included in every list response.
       properties:
-        limit:       { type: integer }
-        has_more:    { type: boolean }
-        next_cursor: { type: string, nullable: true }
+        limit:
+          type: integer
+          description: Number of items per page (as requested)
+          example: 20
+        has_more:
+          type: boolean
+          description: '`true` if more pages exist. Pass `next_cursor` as `after` to get the next page.'
+          example: true
+        next_cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page. `null` when `has_more` is `false`.
+          example: eyJmaWVsZCI6InN0YXJ0c19hdCIsInZhbHVlIjoiMjAyNi0xMi0xMFQyMDowMDowMFoiLCJpZCI6ImFiYzEyMyJ9
       required: [limit, has_more]
 
     ErrorBody:
       type: object
+      description: Consistent error envelope returned for all 4xx and 5xx responses.
       properties:
         error:
           type: object
           properties:
-            code:    { type: string }
-            message: { type: string }
-            details: {}
+            code:
+              type: string
+              description: Machine-readable error code for programmatic error handling.
+              enum:
+                - AUTH_REQUIRED
+                - AUTH_INVALID_TOKEN
+                - AUTH_INVALID_CREDENTIALS
+                - FORBIDDEN
+                - EVENT_NOT_FOUND
+                - VENUE_NOT_FOUND
+                - TICKET_NOT_FOUND
+                - USER_NOT_FOUND
+                - BOOKING_CONFLICT
+                - EVENT_SOLD_OUT
+                - EVENT_CANCELLED
+                - TICKET_ALREADY_CANCELLED
+                - VALIDATION_ERROR
+                - RATE_LIMITED
+                - INTERNAL_ERROR
+            message:
+              type: string
+              description: Human-readable description of the error shown to the user.
+            details:
+              description: Array of field-level validation errors. Only present on `VALIDATION_ERROR`.
           required: [code, message]
       required: [error]
 
@@ -639,190 +2039,509 @@ components:
     HealthResponse:
       type: object
       properties:
-        status:    { type: string, example: ok }
-        service:   { type: string }
-        timestamp: { type: string, format: date-time }
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: ticketsphere-api
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-11-22T10:30:00Z'
+          description: ISO 8601 UTC timestamp of the health check response
 
     # ── Auth ────────────────────────────────────────────────────────────────
     LoginRequest:
       type: object
+      description: Credentials for obtaining a Bearer token.
       properties:
-        username: { type: string, example: demo }
-        password: { type: string, example: demo-password }
+        username:
+          type: string
+          minLength: 1
+          maxLength: 50
+          example: demo
+          description: The user's username (case-sensitive).
+        password:
+          type: string
+          minLength: 1
+          format: password
+          example: demo-password
+          description: The user's password.
       required: [username, password]
 
     TokenResponse:
       type: object
+      description: Successful authentication response with Bearer token.
       properties:
-        token:      { type: string }
-        token_type: { type: string, example: Bearer }
-        expires_in: { type: integer, example: 86400 }
+        token:
+          type: string
+          description: JWT Bearer token. Use in `Authorization: Bearer <token>` header for protected endpoints.
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsInVzZXJuYW1lIjoiZGVtbyIsInJvbGUiOiJhdHRlbmRlZSIsImlhdCI6MTc2NDAwMDAwMCwiZXhwIjoxNzY0MDg2NDAwfQ.signature
+        token_type:
+          type: string
+          example: Bearer
+          description: Always `"Bearer"`.
+        expires_in:
+          type: integer
+          example: 86400
+          description: Token lifetime in seconds (`86400` = 24 hours).
       required: [token, token_type, expires_in]
 
     # ── Venue ───────────────────────────────────────────────────────────────
     Venue:
       type: object
       properties:
-        id:         { type: string, format: uuid }
-        name:       { type: string }
-        address:    { type: string }
-        city:       { type: string }
-        country:    { type: string }
-        location:   { $ref: '#/components/schemas/GeoPoint' }
-        capacity:   { type: integer }
-        created_at: { type: string, format: date-time }
+        id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: DY Patil Stadium
+        address:
+          type: string
+          minLength: 1
+          example: Sector 7, Nerul
+        city:
+          type: string
+          minLength: 1
+          example: Mumbai
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          pattern: '^[A-Z]{2}$'
+          example: IN
+          description: ISO 3166-1 alpha-2 country code (e.g. `IN` for India, `US` for United States).
+        location:
+          $ref: '#/components/schemas/GeoPoint'
+        capacity:
+          type: integer
+          minimum: 1
+          example: 55000
+          description: Maximum number of attendees the venue can hold.
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-01-01T00:00:00Z'
+          description: ISO 8601 UTC timestamp when the venue was registered.
       required: [id, name, address, city, country, location, capacity, created_at]
 
     CreateVenueRequest:
       type: object
+      description: Fields required to create a new venue.
       properties:
-        name:      { type: string }
-        address:   { type: string }
-        city:      { type: string }
-        country:   { type: string, minLength: 2, maxLength: 2 }
-        latitude:  { type: number }
-        longitude: { type: number }
-        capacity:  { type: integer, minimum: 1 }
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Jawaharlal Nehru Stadium
+          description: Venue name (1–200 characters).
+        address:
+          type: string
+          minLength: 1
+          example: Pragati Vihar, Lodhi Road
+          description: Street address.
+        city:
+          type: string
+          minLength: 1
+          example: New Delhi
+          description: City name.
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          pattern: '^[A-Z]{2}$'
+          example: IN
+          description: ISO 3166-1 alpha-2 country code (uppercase, e.g. `IN`).
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: 28.5665
+          description: Venue latitude in decimal degrees (−90 to +90).
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: 77.2374
+          description: Venue longitude in decimal degrees (−180 to +180).
+        capacity:
+          type: integer
+          minimum: 1
+          example: 75000
+          description: Maximum number of attendees (must be ≥ 1).
       required: [name, address, city, country, latitude, longitude, capacity]
 
     VenueListResponse:
       type: object
       properties:
-        data:  { type: array, items: { $ref: '#/components/schemas/Venue' } }
-        total: { type: integer }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Venue'
+        total:
+          type: integer
+          example: 12
+          description: Total number of venues in the result set.
 
     SingleVenueResponse:
       type: object
       properties:
-        data: { $ref: '#/components/schemas/Venue' }
+        data:
+          $ref: '#/components/schemas/Venue'
 
     NearbyVenueItem:
       allOf:
         - $ref: '#/components/schemas/Venue'
         - type: object
           properties:
-            distance_km: { type: number }
+            distance_km:
+              type: number
+              format: double
+              example: 4.2
+              description: Distance from the query point to this venue in kilometres (Haversine formula).
 
     NearbyVenuesResponse:
       type: object
       properties:
-        data:  { type: array, items: { $ref: '#/components/schemas/NearbyVenueItem' } }
-        total: { type: integer }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/NearbyVenueItem'
+          description: Venues ordered nearest-first.
+        total:
+          type: integer
+          example: 3
 
     # ── Event ───────────────────────────────────────────────────────────────
     Event:
       type: object
       properties:
-        id:              { type: string, format: uuid }
-        title:           { type: string }
-        description:     { type: string }
-        status:          { type: string, enum: [draft, published, cancelled, completed] }
-        category:        { type: string, enum: [music, sports, tech, food, art, comedy, theatre, conference, other] }
-        min_price:       { type: number }
-        max_price:       { type: number }
-        venue:           { $ref: '#/components/schemas/Venue' }
-        starts_at:       { type: string, format: date-time }
-        ends_at:         { type: string, format: date-time }
-        total_seats:     { type: integer }
-        available_seats: { type: integer }
-        organizer_id:    { type: string, format: uuid }
-        created_at:      { type: string, format: date-time }
-        updated_at:      { type: string, format: date-time }
+        id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Coldplay Music of the Spheres World Tour
+        description:
+          type: string
+          minLength: 1
+          example: Coldplay brings their spectacular world tour to Mumbai.
+        status:
+          type: string
+          enum: [draft, published, cancelled, completed]
+          example: published
+        category:
+          type: string
+          enum: [music, sports, tech, food, art, comedy, theatre, conference, other]
+          example: music
+        min_price:
+          type: number
+          format: double
+          minimum: 0
+          example: 1500.00
+          description: Lowest ticket price in INR (ISO 4217: INR). `0` for free events.
+        max_price:
+          type: number
+          format: double
+          minimum: 0
+          example: 15000.00
+          description: Highest ticket price in INR (ISO 4217: INR). Equal to `min_price` for single-tier pricing.
+        venue:
+          $ref: '#/components/schemas/Venue'
+        starts_at:
+          type: string
+          format: date-time
+          example: '2026-12-20T19:00:00Z'
+          description: Event start time in ISO 8601 UTC.
+        ends_at:
+          type: string
+          format: date-time
+          example: '2026-12-20T23:00:00Z'
+          description: Event end time in ISO 8601 UTC. Always after `starts_at`.
+        total_seats:
+          type: integer
+          minimum: 1
+          example: 55000
+          description: Total number of seats at the event.
+        available_seats:
+          type: integer
+          minimum: 0
+          example: 12000
+          description: Remaining bookable seats. Decrements on booking, increments on cancellation.
+        organizer_id:
+          type: string
+          format: uuid
+          example: usr-org-001
+          description: UUID of the user who created the event.
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-01T09:00:00Z'
+          description: ISO 8601 UTC timestamp when the event was created.
+        updated_at:
+          type: string
+          format: date-time
+          example: '2026-10-15T12:00:00Z'
+          description: ISO 8601 UTC timestamp of the most recent update.
       required: [id, title, description, status, category, min_price, max_price, starts_at, ends_at, total_seats, available_seats, created_at, updated_at]
 
     CreateEventRequest:
       type: object
+      description: Fields required to create a new event.
       properties:
-        title:       { type: string, minLength: 1, maxLength: 200 }
-        description: { type: string, minLength: 1 }
-        status:      { type: string, enum: [draft, published, cancelled, completed] }
-        category:    { type: string, enum: [music, sports, tech, food, art, comedy, theatre, conference, other] }
-        min_price:   { type: number, minimum: 0 }
-        max_price:   { type: number, minimum: 0 }
-        venue_id:    { type: string, format: uuid }
-        starts_at:   { type: string, format: date-time }
-        ends_at:     { type: string, format: date-time }
-        total_seats: { type: integer, minimum: 1 }
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Pune Tech Summit 2026
+          description: Event title (1–200 characters).
+        description:
+          type: string
+          minLength: 1
+          example: Annual technology conference covering AI, cloud, and open source.
+          description: Full event description shown on the detail page.
+        status:
+          type: string
+          enum: [draft, published, cancelled, completed]
+          default: published
+          description: Initial status. Use `draft` to save without publishing. Defaults to `published`.
+        category:
+          type: string
+          enum: [music, sports, tech, food, art, comedy, theatre, conference, other]
+          example: conference
+        min_price:
+          type: number
+          format: double
+          minimum: 0
+          example: 0
+          description: Lowest ticket price in INR. Set to `0` for free events.
+        max_price:
+          type: number
+          format: double
+          minimum: 0
+          example: 999.00
+          description: Highest ticket price in INR. Must be ≥ `min_price`.
+        venue_id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+          description: UUID of an existing venue. See `GET /api/v1/venues`.
+        starts_at:
+          type: string
+          format: date-time
+          example: '2026-12-15T10:00:00Z'
+          description: Event start time in ISO 8601 UTC (must include full timestamp with seconds and `Z`).
+        ends_at:
+          type: string
+          format: date-time
+          example: '2026-12-15T18:00:00Z'
+          description: Event end time in ISO 8601 UTC. Must be after `starts_at`.
+        total_seats:
+          type: integer
+          minimum: 1
+          example: 500
+          description: Total ticket capacity. `available_seats` is set to this value automatically.
       required: [title, description, category, min_price, max_price, venue_id, starts_at, ends_at, total_seats]
 
     UpdateEventRequest:
       type: object
+      description: Partial update — include only the fields you want to change.
       properties:
-        title:       { type: string }
-        description: { type: string }
-        status:      { type: string, enum: [draft, published, cancelled, completed] }
-        category:    { type: string, enum: [music, sports, tech, food, art, comedy, theatre, conference, other] }
-        min_price:   { type: number }
-        max_price:   { type: number }
-        venue_id:    { type: string, format: uuid }
-        starts_at:   { type: string, format: date-time }
-        ends_at:     { type: string, format: date-time }
-        total_seats: { type: integer }
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum: [draft, published, cancelled, completed]
+        category:
+          type: string
+          enum: [music, sports, tech, food, art, comedy, theatre, conference, other]
+        min_price:
+          type: number
+          format: double
+          minimum: 0
+          description: Updated minimum price in INR.
+        max_price:
+          type: number
+          format: double
+          minimum: 0
+          description: Updated maximum price in INR.
+        venue_id:
+          type: string
+          format: uuid
+          description: Relocate the event to a different venue.
+        starts_at:
+          type: string
+          format: date-time
+          description: Rescheduled start time (ISO 8601 UTC).
+        ends_at:
+          type: string
+          format: date-time
+          description: Rescheduled end time (ISO 8601 UTC). Must be after `starts_at`.
+        total_seats:
+          type: integer
+          minimum: 1
+          description: Updated total capacity.
 
     SingleEventResponse:
       type: object
       properties:
-        data: { $ref: '#/components/schemas/Event' }
+        data:
+          $ref: '#/components/schemas/Event'
 
     EventListResponse:
       type: object
       properties:
-        data:       { type: array, items: { $ref: '#/components/schemas/Event' } }
-        pagination: { $ref: '#/components/schemas/Pagination' }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
       required: [data, pagination]
 
     EventListSimpleResponse:
       type: object
       properties:
-        data:  { type: array, items: { $ref: '#/components/schemas/Event' } }
-        total: { type: integer }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        total:
+          type: integer
+          example: 5
+          description: Total number of events in the result set.
 
     NearbyEventItem:
-      type: object
-      properties:
-        distance_km: { type: number }
       allOf:
         - $ref: '#/components/schemas/Event'
+        - type: object
+          properties:
+            distance_km:
+              type: number
+              format: double
+              example: 4.2
+              description: Distance from the query point to the event venue in kilometres.
 
     NearbyEventsResponse:
       type: object
       properties:
-        data:  { type: array, items: { $ref: '#/components/schemas/NearbyEventItem' } }
-        total: { type: integer }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/NearbyEventItem'
+          description: Events ordered nearest-first.
+        total:
+          type: integer
+          example: 3
 
     ScheduleResponse:
       type: object
       properties:
         data:
           type: array
-          items: { $ref: '#/components/schemas/Event' }
+          items:
+            $ref: '#/components/schemas/Event'
+          description: Events overlapping the time window, ordered by `starts_at` ascending.
         window:
           type: object
+          description: The requested time window, echoed back for confirmation.
           properties:
-            starts_at: { type: string, format: date-time }
-            ends_at:   { type: string, format: date-time }
-        pagination: { $ref: '#/components/schemas/Pagination' }
+            starts_at:
+              type: string
+              format: date-time
+              example: '2026-12-01T00:00:00Z'
+            ends_at:
+              type: string
+              format: date-time
+              example: '2026-12-31T23:59:59Z'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
 
     # ── Ticket ──────────────────────────────────────────────────────────────
     Ticket:
       type: object
       properties:
-        id:           { type: string, format: uuid }
-        event_id:     { type: string, format: uuid }
-        event_title:  { type: string }
-        user_id:      { type: string, format: uuid }
-        status:       { type: string, enum: [confirmed, cancelled, pending] }
-        price:        { type: number }
-        seat_number:  { type: string }
-        booked_at:    { type: string, format: date-time }
-        cancelled_at: { type: string, format: date-time, nullable: true }
+        id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        event_id:
+          type: string
+          format: uuid
+          example: evt-001
+          description: UUID of the event this ticket is for.
+        event_title:
+          type: string
+          example: Coldplay Music of the Spheres World Tour
+          description: Denormalised event title — available without a separate event fetch.
+        user_id:
+          type: string
+          format: uuid
+          example: usr-001
+          description: UUID of the user who booked this ticket.
+        status:
+          type: string
+          enum: [confirmed, cancelled, pending]
+          example: confirmed
+          description: |
+            Ticket lifecycle:
+            - `confirmed` — booking confirmed and ticket is valid for entry
+            - `cancelled` — ticket was cancelled; seat has been released
+            - `pending` — payment processing (transitional state)
+        price:
+          type: number
+          format: double
+          example: 3500.00
+          description: Price paid in INR (ISO 4217: INR). Fixed at booking time — not affected by later price changes.
+        seat_number:
+          type: string
+          nullable: true
+          example: GA-4521
+          description: Assigned seat identifier. May be `null` for general-admission events.
+        booked_at:
+          type: string
+          format: date-time
+          example: '2026-11-01T14:30:00Z'
+          description: ISO 8601 UTC timestamp when the ticket was booked.
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+          description: ISO 8601 UTC timestamp when the ticket was cancelled. `null` if still active.
       required: [id, event_id, user_id, status, price, booked_at]
 
     BookTicketRequest:
       type: object
+      description: Request body for booking tickets.
       properties:
-        event_id: { type: string, format: uuid }
-        quantity: { type: integer, minimum: 1, maximum: 10, default: 1 }
+        event_id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+          description: UUID of the published event to book tickets for.
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 1
+          example: 2
+          description: Number of tickets to book (1–10). Defaults to `1` if omitted.
       required: [event_id]
 
     BookTicketResponse:
@@ -830,112 +2549,185 @@ components:
       properties:
         data:
           type: array
-          items: { $ref: '#/components/schemas/Ticket' }
+          items:
+            $ref: '#/components/schemas/Ticket'
+          description: Array of created tickets. Length equals the requested `quantity`.
 
     SingleTicketResponse:
       type: object
       properties:
-        data: { $ref: '#/components/schemas/Ticket' }
+        data:
+          $ref: '#/components/schemas/Ticket'
 
     TicketListResponse:
       type: object
       properties:
-        data:       { type: array, items: { $ref: '#/components/schemas/Ticket' } }
-        pagination: { $ref: '#/components/schemas/Pagination' }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ticket'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
 
     # ── Category ────────────────────────────────────────────────────────────
     Category:
       type: object
       properties:
-        id:          { type: string }
-        label:       { type: string }
-        description: { type: string }
+        id:
+          type: string
+          enum: [music, sports, tech, food, art, comedy, theatre, conference, other]
+          example: music
+          description: Use this value as the `category` filter parameter in event queries.
+        label:
+          type: string
+          example: Music
+          description: Human-readable display name.
+        description:
+          type: string
+          example: Concerts, live performances, music festivals
+          description: Short description of what events belong to this category.
 
   responses:
     Unauthorized:
-      description: Authentication required or token invalid
+      description: Authentication required or token invalid/expired
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
           examples:
             AUTH_REQUIRED:
-              value: { error: { code: AUTH_REQUIRED, message: Authentication required. } }
+              summary: No Authorization header provided
+              value:
+                error:
+                  code: AUTH_REQUIRED
+                  message: Authentication required.
             AUTH_INVALID_TOKEN:
-              value: { error: { code: AUTH_INVALID_TOKEN, message: Token is invalid or has expired. } }
+              summary: Token is malformed or expired
+              value:
+                error:
+                  code: AUTH_INVALID_TOKEN
+                  message: Token is invalid or has expired.
 
     AuthInvalidCredentials:
       description: Invalid username or password
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: AUTH_INVALID_CREDENTIALS, message: Invalid username or password. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: AUTH_INVALID_CREDENTIALS
+              message: Invalid username or password.
 
     Forbidden:
-      description: Insufficient permissions
+      description: Authenticated but not authorized for this action
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: FORBIDDEN, message: You do not have permission to perform this action. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: FORBIDDEN
+              message: You do not have permission to perform this action.
 
     EventNotFound:
-      description: Event not found
+      description: No event with the specified ID exists
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: EVENT_NOT_FOUND, message: Event not found. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: EVENT_NOT_FOUND
+              message: Event not found.
 
     VenueNotFound:
-      description: Venue not found
+      description: No venue with the specified ID exists
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: VENUE_NOT_FOUND, message: Venue not found. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: VENUE_NOT_FOUND
+              message: Venue not found.
 
     TicketNotFound:
-      description: Ticket not found
+      description: No ticket with the specified ID exists (or not accessible to this user)
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: TICKET_NOT_FOUND, message: Ticket not found. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: TICKET_NOT_FOUND
+              message: Ticket not found.
 
     BookingConflict:
-      description: Event sold out or cancelled
+      description: Cannot book — event is sold out or cancelled
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
           examples:
             EVENT_SOLD_OUT:
-              value: { error: { code: EVENT_SOLD_OUT, message: This event has no available seats. } }
+              summary: No seats remaining
+              value:
+                error:
+                  code: EVENT_SOLD_OUT
+                  message: This event has no available seats.
             EVENT_CANCELLED:
-              value: { error: { code: EVENT_CANCELLED, message: Cannot book a ticket for a cancelled event. } }
+              summary: Event was cancelled
+              value:
+                error:
+                  code: EVENT_CANCELLED
+                  message: Cannot book a ticket for a cancelled event.
 
     TicketAlreadyCancelled:
-      description: Ticket is already cancelled
+      description: Ticket has already been cancelled
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: TICKET_ALREADY_CANCELLED, message: This ticket has already been cancelled. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: TICKET_ALREADY_CANCELLED
+              message: This ticket has already been cancelled.
 
     ValidationError:
-      description: Request validation failed
+      description: Request body or query parameters failed validation
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: VALIDATION_ERROR, message: Request validation failed. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed.
+              details:
+                - path: [title]
+                  message: String must contain at least 1 character(s)
 
     RateLimited:
-      description: Too many requests
+      description: Rate limit exceeded — wait for the window to reset before retrying
       headers:
         RateLimit-Limit:
-          schema: { type: integer }
-          description: Maximum requests per window
+          schema:
+            type: integer
+          description: Maximum requests allowed per window
         RateLimit-Remaining:
-          schema: { type: integer }
-          description: Requests remaining in current window
+          schema:
+            type: integer
+          description: Requests remaining in the current window
         RateLimit-Reset:
-          schema: { type: integer }
+          schema:
+            type: integer
           description: Unix timestamp when the window resets
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorBody' }
-          example: { error: { code: RATE_LIMITED, message: Too many requests. Please try again later. } }
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: RATE_LIMITED
+              message: Too many requests. Please try again later.
