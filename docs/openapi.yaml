@@ -2076,7 +2076,7 @@ components:
       properties:
         token:
           type: string
-          description: JWT Bearer token. Use in `Authorization: Bearer <token>` header for protected endpoints.
+          description: "JWT Bearer token. Include in every protected request as: Authorization: Bearer <token>"
           example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsInVzZXJuYW1lIjoiZGVtbyIsInJvbGUiOiJhdHRlbmRlZSIsImlhdCI6MTc2NDAwMDAwMCwiZXhwIjoxNzY0MDg2NDAwfQ.signature
         token_type:
           type: string
@@ -2249,13 +2249,13 @@ components:
           format: double
           minimum: 0
           example: 1500.00
-          description: Lowest ticket price in INR (ISO 4217: INR). `0` for free events.
+          description: "Lowest ticket price in INR (ISO 4217 — INR). Use 0 for free events."
         max_price:
           type: number
           format: double
           minimum: 0
           example: 15000.00
-          description: Highest ticket price in INR (ISO 4217: INR). Equal to `min_price` for single-tier pricing.
+          description: "Highest ticket price in INR (ISO 4217 — INR). Equal to min_price for single-tier pricing."
         venue:
           $ref: '#/components/schemas/Venue'
         starts_at:
@@ -2507,7 +2507,7 @@ components:
           type: number
           format: double
           example: 3500.00
-          description: Price paid in INR (ISO 4217: INR). Fixed at booking time — not affected by later price changes.
+          description: "Price paid in INR (ISO 4217 — INR). Fixed at booking time, not affected by later price changes."
         seat_number:
           type: string
           nullable: true
